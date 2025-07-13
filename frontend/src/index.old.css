@@ -1,0 +1,114 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Manufacturing-focused color scheme */
+    --background: 215 25% 97%;
+    --foreground: 215 35% 15%;
+    --card: 0 0% 100%;
+    --card-foreground: 215 35% 15%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 35% 15%;
+    
+    /* Industrial blue primary */
+    --primary: 210 85% 45%;
+    --primary-foreground: 0 0% 98%;
+    
+    /* Neutral grays */
+    --secondary: 210 15% 92%;
+    --secondary-foreground: 215 35% 15%;
+    --muted: 210 15% 95%;
+    --muted-foreground: 215 20% 45%;
+    --accent: 210 15% 90%;
+    --accent-foreground: 215 35% 15%;
+    
+    /* Status colors */
+    --destructive: 0 75% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --success: 145 65% 45%;
+    --success-foreground: 0 0% 98%;
+    --warning: 45 85% 55%;
+    --warning-foreground: 0 0% 98%;
+    
+    /* Borders and inputs */
+    --border: 210 15% 85%;
+    --input: 210 15% 90%;
+    --ring: 210 85% 45%;
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 215 25% 8%;
+    --foreground: 210 15% 90%;
+    --card: 215 25% 10%;
+    --card-foreground: 210 15% 90%;
+    --popover: 215 25% 10%;
+    --popover-foreground: 210 15% 90%;
+    --primary: 210 85% 60%;
+    --primary-foreground: 215 25% 8%;
+    --secondary: 215 25% 15%;
+    --secondary-foreground: 210 15% 90%;
+    --muted: 215 25% 12%;
+    --muted-foreground: 210 15% 60%;
+    --accent: 215 25% 15%;
+    --accent-foreground: 210 15% 90%;
+    --destructive: 0 75% 65%;
+    --destructive-foreground: 210 15% 90%;
+    --border: 215 25% 20%;
+    --input: 215 25% 15%;
+    --ring: 210 85% 60%;
+  }
+}
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-gray-200;
+  }
+  body {
+    @apply bg-gray-50 text-gray-900 font-sans;
+    font-feature-settings: "rlig" 1, "calt" 1;
+    margin: 0;
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  /* Manufacturing status indicators */
+  .status-pending {
+    @apply bg-yellow-100 text-yellow-800 border-yellow-200;
+  }
+  
+  .status-in-progress {
+    @apply bg-blue-100 text-blue-800 border-blue-200;
+  }
+  
+  .status-completed {
+    @apply bg-green-100 text-green-800 border-green-200;
+  }
+  
+  .status-paused {
+    @apply bg-orange-100 text-orange-800 border-orange-200;
+  }
+  
+  .status-error {
+    @apply bg-red-100 text-red-800 border-red-200;
+  }
+  
+  /* Station-specific colors */
+  .station-drilling { @apply bg-blue-600 text-white hover:bg-blue-700; }
+  .station-reaming { @apply bg-indigo-600 text-white hover:bg-indigo-700; }
+  .station-rifling { @apply bg-purple-600 text-white hover:bg-purple-700; }
+  .station-lapping { @apply bg-pink-600 text-white hover:bg-pink-700; }
+  .station-chambering { @apply bg-rose-600 text-white hover:bg-rose-700; }
+  .station-threading { @apply bg-red-600 text-white hover:bg-red-700; }
+  .station-profiling { @apply bg-orange-600 text-white hover:bg-orange-700; }
+  .station-stress { @apply bg-amber-600 text-white hover:bg-amber-700; }
+  .station-finishing { @apply bg-yellow-600 text-white hover:bg-yellow-700; }
+  .station-qc { @apply bg-green-600 text-white hover:bg-green-700; }
+}
