@@ -1,5 +1,5 @@
 {
-  "name": "my-turborepo",
+  "name": "rifle-barrel-mes",
   "private": true,
   "scripts": {
     "build": "turbo run build",
