@@ -27,7 +27,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  Layout, Menu, Card, Button, Modal, Table, Statistic, Row, Col, Input, Select, Form, notification, Spin, Typography
+  Layout, Menu, Card, Button, Modal, Table, Statistic, Row, Col, Input, Select, Form, notification, Spin, Typography, Space
 } from 'antd';
 
 const { Title } = Typography;
@@ -118,6 +118,9 @@ const mockApiService = {
   // Cross-browser sync mechanism using BroadcastChannel API
   syncChannel: typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('mes-sync') : null,
   
+  // Private property for throttling logs
+  _lastBarrelCheck: 0,
+  
   // Initialize sync channel listener
   initSync: () => {
     if (mockApiService.syncChannel) {
@@ -143,16 +146,56 @@ const mockApiService = {
   // User authentication and management
   getUsers: (): User[] => {
     const defaultUsers: User[] = [
-      { id: 'user001', username: 'jsmith', fullName: 'John Smith', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
-      { id: 'user002', username: 'mjohnson', fullName: 'Mary Johnson', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
-      { id: 'user003', username: 'rbrown', fullName: 'Robert Brown', role: 'supervisor' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
-      { id: 'user004', username: 'swilson', fullName: 'Sarah Wilson', role: 'operator' as const, department: 'Quality Control', isActive: true, created_at: new Date().toISOString() },
-      { id: 'user005', username: 'admin', fullName: 'System Administrator', role: 'admin' as const, department: 'IT', isActive: true, created_at: new Date().toISOString() },
-      { id: 'user006', username: 'testuser', fullName: 'Unassigned User', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() }
+      // Station operators (one for each production station)
+      { id: 'user001', username: 'drill_op', fullName: 'David Miller', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user002', username: 'ream_op', fullName: 'Rachel Thompson', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user003', username: 'rifle_op', fullName: 'Richard Garcia', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user004', username: 'heat_op', fullName: 'Helen Martinez', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user005', username: 'lap_op', fullName: 'Lucas Anderson', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user006', username: 'hone_op', fullName: 'Hannah Taylor', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user007', username: 'flute_op', fullName: 'Felix Turner', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user008', username: 'chamber_op', fullName: 'Charles Wilson', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user009', username: 'inspect_op', fullName: 'Isabella Moore', role: 'operator' as const, department: 'Quality Control', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user010', username: 'finish_op', fullName: 'Frank Johnson', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user011', username: 'qc_op', fullName: 'Quinn Davis', role: 'operator' as const, department: 'Quality Control', isActive: true, created_at: new Date().toISOString() },
+      
+      // Supervisors and admin
+      { id: 'user012', username: 'supervisor', fullName: 'Sarah Wilson', role: 'supervisor' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() },
+      { id: 'user013', username: 'admin', fullName: 'System Administrator', role: 'admin' as const, department: 'IT', isActive: true, created_at: new Date().toISOString() },
+      
+      // Test user with no assignment
+      { id: 'user014', username: 'testuser', fullName: 'Unassigned User', role: 'operator' as const, department: 'Manufacturing', isActive: true, created_at: new Date().toISOString() }
     ];
     
     const stored = localStorage.getItem('users');
-    return stored ? JSON.parse(stored) : defaultUsers;
+    if (stored) {
+      try {
+        const users = JSON.parse(stored);
+        
+        // Check for data corruption - if all users have the same fullName, reset data
+        const uniqueNames = new Set(users.map((u: User) => u.fullName));
+        if (uniqueNames.size === 1 && users.length > 1) {
+          console.warn('Detected corrupted user data in localStorage - resetting to defaults');
+          localStorage.removeItem('users');
+          return defaultUsers;
+        }
+        
+        // Check if we have the minimum expected users
+        if (users.length < 10) {
+          console.warn('Insufficient user data in localStorage - resetting to defaults');
+          localStorage.removeItem('users');
+          return defaultUsers;
+        }
+        
+        return users;
+      } catch (error) {
+        console.warn('Invalid user data in localStorage - resetting to defaults');
+        localStorage.removeItem('users');
+        return defaultUsers;
+      }
+    }
+    
+    return defaultUsers;
   },
 
   // Admin user management functions
@@ -189,8 +232,40 @@ const mockApiService = {
 
   // Station assignments
   getStationAssignments: (): StationAssignment[] => {
+    const defaultAssignments: StationAssignment[] = [
+      { userId: 'user001', stationId: '1', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // David Miller -> Drilling
+      { userId: 'user002', stationId: '2', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Rachel Thompson -> Reaming
+      { userId: 'user003', stationId: '3', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Richard Garcia -> Rifling
+      { userId: 'user004', stationId: '4', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Helen Martinez -> Heat Treat
+      { userId: 'user005', stationId: '5', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Lucas Anderson -> Lapping
+      { userId: 'user006', stationId: '6', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Hannah Taylor -> Honing
+      { userId: 'user007', stationId: '7', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Felix Turner -> Fluting
+      { userId: 'user008', stationId: '8', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Charles Wilson -> Chambering
+      { userId: 'user009', stationId: '9', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Isabella Moore -> Inspection
+      { userId: 'user010', stationId: '10', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() }, // Frank Johnson -> Finishing
+      { userId: 'user011', stationId: '11', isActive: true, assignedBy: 'user013', assignedAt: new Date().toISOString() } // Quinn Davis -> Final QC
+    ];
+    
     const stored = localStorage.getItem('station_assignments');
-    return stored ? JSON.parse(stored) : [];
+    if (stored) {
+      try {
+        const assignments = JSON.parse(stored);
+        // Check if we have any active assignments
+        const activeAssignments = assignments.filter((a: StationAssignment) => a.isActive);
+        if (activeAssignments.length === 0) {
+          console.warn('No active station assignments found - resetting to defaults');
+          localStorage.removeItem('station_assignments');
+          return defaultAssignments;
+        }
+        return assignments;
+      } catch (error) {
+        console.warn('Invalid station assignment data - resetting to defaults');
+        localStorage.removeItem('station_assignments');
+        return defaultAssignments;
+      }
+    }
+    
+    return defaultAssignments;
   },
 
   assignUserToStation: async (userId: string, stationId: string): Promise<StationAssignment> => {
@@ -247,7 +322,7 @@ const mockApiService = {
     const users = mockApiService.getUsers();
     const assignments = mockApiService.getStationAssignments();
     
-    const totalOperations = barrels.reduce((sum, barrel) => sum + barrel.operation_logs.length, 0);
+    const totalOperations = barrels.reduce((sum, barrel) => sum + (barrel.operation_logs?.length || 0), 0);
     const activeOperators = users.filter(u => u.isActive && u.role === 'operator').length;
     const assignedStations = assignments.filter(a => a.isActive).length;
     
@@ -259,13 +334,13 @@ const mockApiService = {
       assignedStations,
       totalStations: mockApiService.getStations().length,
       recentActivity: barrels
-        .flatMap(b => b.operation_logs)
+        .flatMap(b => b.operation_logs || [])
         .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
         .slice(0, 10)
     };
   },
 
-  // Authentication methods
+  // Enhanced authentication methods with impersonation support
   login: async (username: string, password: string): Promise<User | null> => {
     // Simple authentication - in real app, this would call a secure API
     const users = mockApiService.getUsers();
@@ -289,9 +364,102 @@ const mockApiService = {
     return null;
   },
 
+  // Impersonation login for admins and supervisors
+  impersonateUser: async (targetUserId: string): Promise<User | null> => {
+    const currentUser = mockApiService.getCurrentUser();
+    const users = mockApiService.getUsers();
+    const targetUser = users.find(u => u.id === targetUserId && u.isActive);
+    
+    // Security check: Only admins and supervisors can impersonate
+    if (!currentUser || (currentUser.role !== 'admin' && currentUser.role !== 'supervisor')) {
+      throw new Error('Access denied: Only administrators and supervisors can impersonate users.');
+    }
+    
+    // Supervisors can only impersonate operators
+    if (currentUser.role === 'supervisor' && targetUser?.role !== 'operator') {
+      throw new Error('Access denied: Supervisors can only impersonate operator accounts.');
+    }
+    
+    // Admins cannot impersonate other admins (security measure)
+    if (targetUser?.role === 'admin' && currentUser.role === 'admin' && targetUser.id !== currentUser.id) {
+      throw new Error('Access denied: Admins cannot impersonate other admin accounts.');
+    }
+    
+    if (targetUser) {
+      // Store original user info for restoration
+      const originalSession = localStorage.getItem('user_session');
+      localStorage.setItem('original_user_session', originalSession || '');
+      localStorage.setItem('impersonation_active', 'true');
+      localStorage.setItem('impersonated_by', currentUser.id);
+      
+      const impersonationSession: LoginSession = {
+        user: targetUser,
+        tabletId: mockApiService.getTabletId(),
+        loginTime: new Date().toISOString()
+      };
+      
+      // Update session to impersonated user
+      localStorage.setItem('user_session', JSON.stringify(impersonationSession));
+      localStorage.setItem('current_user', JSON.stringify(targetUser));
+      
+      return targetUser;
+    }
+    
+    return null;
+  },
+
+  // Stop impersonation and return to original user
+  stopImpersonation: async (): Promise<User | null> => {
+    const originalSessionData = localStorage.getItem('original_user_session');
+    
+    if (originalSessionData && mockApiService.isImpersonating()) {
+      const originalSession = JSON.parse(originalSessionData);
+      
+      // Restore original session
+      localStorage.setItem('user_session', JSON.stringify(originalSession));
+      localStorage.setItem('current_user', JSON.stringify(originalSession.user));
+      
+      // Clear impersonation flags
+      localStorage.removeItem('original_user_session');
+      localStorage.removeItem('impersonation_active');
+      localStorage.removeItem('impersonated_by');
+      
+      return originalSession.user;
+    }
+    
+    return null;
+  },
+
+  // Check if currently impersonating
+  isImpersonating: (): boolean => {
+    return localStorage.getItem('impersonation_active') === 'true';
+  },
+
+  // Get original user (the one doing the impersonation)
+  getOriginalUser: (): User | null => {
+    const originalSessionData = localStorage.getItem('original_user_session');
+    if (originalSessionData && mockApiService.isImpersonating()) {
+      const originalSession = JSON.parse(originalSessionData);
+      return originalSession.user;
+    }
+    return null;
+  },
+
   logout: async (): Promise<void> => {
+    // If impersonating, stop impersonation instead of full logout
+    if (mockApiService.isImpersonating()) {
+      const originalUser = await mockApiService.stopImpersonation();
+      if (originalUser) {
+        return; // Return to original user without full logout
+      }
+    }
+    
+    // Full logout
     localStorage.removeItem('user_session');
     localStorage.removeItem('current_user');
+    localStorage.removeItem('original_user_session');
+    localStorage.removeItem('impersonation_active');
+    localStorage.removeItem('impersonated_by');
   },
 
   getCurrentUser: (): User | null => {
@@ -338,6 +506,11 @@ const mockApiService = {
   
   // Notify all listeners of data changes (triggers UI updates)
   notifyDataChange: () => {
+    // Reduced logging frequency for sync notifications
+    if (mockApiService.syncListeners.size > 0 && (!(window as any)._lastSyncLog || Date.now() - (window as any)._lastSyncLog > 30000)) {
+      console.log(`🔔 Notifying ${mockApiService.syncListeners.size} listeners of data change`);
+      (window as any)._lastSyncLog = Date.now();
+    }
     mockApiService.syncListeners.forEach(callback => callback());
   },
   
@@ -345,6 +518,12 @@ const mockApiService = {
   saveData: async (key: string, data: any) => {
     // Save to localStorage (immediate local storage)
     localStorage.setItem(key, JSON.stringify(data));
+    
+    // Reduced logging frequency
+    if (!(window as any)._lastSaveLog || Date.now() - (window as any)._lastSaveLog > 10000) {
+      console.log(`💾 Data operations: saving "${key}" with ${data.length || 'unknown'} items`);
+      (window as any)._lastSaveLog = Date.now();
+    }
     
     // Broadcast change to other browsers/tabs
     mockApiService.broadcastChange(key);
@@ -381,6 +560,21 @@ const mockApiService = {
     return `Tablet-${parts[parts.length - 1]?.substr(0, 4) || 'XXX'}`;
   },
 
+  // Check if current user can access a specific station (security validation)
+  canUserAccessStation: (stationId: string): boolean => {
+    const currentUser = mockApiService.getCurrentUser();
+    if (!currentUser) return false;
+    
+    // Admins and supervisors have access to all stations
+    if (currentUser.role === 'admin' || currentUser.role === 'supervisor') {
+      return true;
+    }
+    
+    // Operators can only access assigned stations
+    const assignedStations = mockApiService.getAssignedStations(currentUser.id);
+    return assignedStations.includes(stationId);
+  },
+
   getStations: (): SimpleStation[] => [
     { id: '1', name: 'Drilling', sequence: 1, description: 'Initial barrel blank drilling' },
     { id: '2', name: 'Reaming', sequence: 2, description: 'Precision bore reaming' },
@@ -388,10 +582,11 @@ const mockApiService = {
     { id: '4', name: 'Heat Treat', sequence: 4, description: 'External heat treatment' },
     { id: '5', name: 'Lapping', sequence: 5, description: 'Hand/machine lapping' },
     { id: '6', name: 'Honing', sequence: 6, description: 'Optional honing/polishing' },
-    { id: '7', name: 'Chambering', sequence: 7, description: 'CNC chambering & threading' },
-    { id: '8', name: 'Inspection', sequence: 8, description: 'QC inspection & measurements' },
-    { id: '9', name: 'Finishing', sequence: 9, description: 'Surface coating application' },
-    { id: '10', name: 'Final QC', sequence: 10, description: 'Final quality control' }
+    { id: '7', name: 'Fluting', sequence: 7, description: 'External barrel fluting for weight reduction' },
+    { id: '8', name: 'Chambering', sequence: 8, description: 'CNC chambering & threading' },
+    { id: '9', name: 'Inspection', sequence: 9, description: 'QC inspection & measurements' },
+    { id: '10', name: 'Finishing', sequence: 10, description: 'Surface coating application' },
+    { id: '11', name: 'Final QC', sequence: 11, description: 'Final quality control' }
   ],
 
   getBarrels: async (): Promise<SimpleBarrel[]> => {
@@ -421,7 +616,16 @@ const mockApiService = {
       }
     ];
     
-    return await mockApiService.loadData('barrels', demoBarrels);
+    const barrels = await mockApiService.loadData('barrels', demoBarrels);
+    // Reduced logging frequency - only log on data changes or startup
+    if (!mockApiService._lastBarrelCheck || Date.now() - mockApiService._lastBarrelCheck > 30000) {
+      console.log('📦 getBarrels periodic check:', {
+        total: barrels.length,
+        activeCount: barrels.filter((b: SimpleBarrel) => b.status.includes('IN_PROGRESS')).length
+      });
+      mockApiService._lastBarrelCheck = Date.now();
+    }
+    return barrels;
   },
 
   createBarrel: async (data: Omit<SimpleBarrel, 'id' | 'created_at' | 'status' | 'operation_logs'>): Promise<SimpleBarrel> => {
@@ -439,6 +643,13 @@ const mockApiService = {
   },
 
   startOperation: async (barrelId: string, stationName: string): Promise<SimpleBarrel> => {
+    // Security validation: Check if user has access to this station
+    const stations = mockApiService.getStations();
+    const targetStation = stations.find(s => s.name === stationName);
+    if (targetStation && !mockApiService.canUserAccessStation(targetStation.id)) {
+      throw new Error(`Access denied: You are not authorized to operate ${stationName} station. Contact your supervisor for station assignment.`);
+    }
+    
     const barrels = await mockApiService.getBarrels();
     const barrel = barrels.find(b => b.id === barrelId);
     if (barrel) {
@@ -449,10 +660,23 @@ const mockApiService = {
       
       const stationStatus = stationName.toUpperCase().replace(' ', '_');
       barrel.status = `${stationStatus}_IN_PROGRESS`;
+      console.log('🚀 Starting operation:', {
+        barrelId: barrel.id,
+        stationName,
+        newStatus: barrel.status,
+        operatorId: mockApiService.getOperatorId(),
+        operatorName: mockApiService.getOperatorName(),
+        tabletId: mockApiService.getTabletId()
+      });
       barrel.started_at = new Date().toISOString();
       barrel.current_operator_id = mockApiService.getOperatorId();
       barrel.current_operator_name = mockApiService.getOperatorName();
       barrel.current_tablet_id = mockApiService.getTabletId();
+      
+      // Ensure operation_logs array exists
+      if (!barrel.operation_logs) {
+        barrel.operation_logs = [];
+      }
       
       barrel.operation_logs.push({
         station_name: stationName,
@@ -463,6 +687,13 @@ const mockApiService = {
         tablet_id: mockApiService.getTabletId()
       });
       await mockApiService.saveData('barrels', barrels); // Sync across tablets
+      
+      console.log('✅ Operation started and saved to localStorage:', {
+        barrelId: barrel.id,
+        newStatus: barrel.status,
+        operator: barrel.current_operator_name,
+        tabletId: barrel.current_tablet_id
+      });
     }
     return barrel!;
   },
@@ -479,19 +710,23 @@ const mockApiService = {
     const barrels = await mockApiService.getBarrels();
     const barrel = barrels.find(b => b.id === barrelId);
     if (barrel) {
+      // Security validation: Check if user has access to the current station
+      const stations = mockApiService.getStations();
+      const currentStationName = barrel.status.replace(/_IN_PROGRESS$|_PENDING$/, '');
+      const currentStation = stations.find(s => s.name.toUpperCase().replace(' ', '_') === currentStationName);
+      if (currentStation && !mockApiService.canUserAccessStation(currentStation.id)) {
+        throw new Error(`Access denied: You are not authorized to operate ${currentStation.name} station. Contact your supervisor for station assignment.`);
+      }
+      
       // Security check: Only the operator who started this operation can complete it
       if (barrel.current_operator_id && barrel.current_operator_id !== mockApiService.getOperatorId()) {
         throw new Error(`Only ${barrel.current_operator_name || 'the operator who started this operation'} can complete it (${barrel.current_tablet_id})`);
       }
       
-      const stations = mockApiService.getStations();
-      // Extract station name by removing _IN_PROGRESS or _PENDING suffix
-      const currentStationName = barrel.status.replace(/_IN_PROGRESS$|_PENDING$/, '');
-      const currentStation = stations.find(s => s.name.toUpperCase().replace(' ', '_') === currentStationName);
       const nextStation = stations.find(s => s.sequence === (currentStation?.sequence || 0) + 1);
       
       // Update the last operation log
-      if (barrel.operation_logs.length > 0) {
+      if (barrel.operation_logs && barrel.operation_logs.length > 0) {
         const lastLog = barrel.operation_logs[barrel.operation_logs.length - 1];
         lastLog.end_time = new Date().toISOString();
         if (notes) {
@@ -500,11 +735,20 @@ const mockApiService = {
       }
       
       barrel.status = nextStation ? `${nextStation.name.toUpperCase().replace(' ', '_')}_PENDING` : 'COMPLETED';
+      console.log('✅ Completing operation:', {
+        barrelId: barrel.id,
+        oldStatus: `${currentStationName}_IN_PROGRESS`,
+        newStatus: barrel.status,
+        nextStation: nextStation?.name,
+        operatorId: mockApiService.getOperatorId(),
+        operatorName: mockApiService.getOperatorName()
+      });
       barrel.completed_at = barrel.status === 'COMPLETED' ? new Date().toISOString() : undefined;
       barrel.started_at = undefined;
       
       // Release ownership when operation is completed
       barrel.current_operator_id = undefined;
+      barrel.current_operator_name = undefined;
       barrel.current_tablet_id = undefined;
       
       await mockApiService.saveData('barrels', barrels); // Sync completion across tablets
@@ -530,6 +774,35 @@ const mockApiService = {
         };
       })
     };
+  },
+
+  // Add method to get all barrel process information
+  getBarrelProcessInfo: async () => {
+    const barrels = await mockApiService.getBarrels();
+    const stations = mockApiService.getStations();
+    
+    return barrels.map(barrel => {
+      // Determine current station
+      const statusParts = barrel.status.split('_');
+      const stationStatus = statusParts.slice(0, -1).join('_');
+      const currentStation = stations.find(s => 
+        s.name.toUpperCase().replace(' ', '_') === stationStatus
+      );
+      
+      // Calculate progress percentage
+      const currentStationIndex = currentStation ? currentStation.sequence : 
+        (barrel.status === 'COMPLETED' ? stations.length + 1 : 0);
+      const progressPercentage = Math.round((currentStationIndex / (stations.length + 1)) * 100);
+      
+      return {
+        ...barrel,
+        currentStation: currentStation?.name || (barrel.status === 'COMPLETED' ? 'Completed' : 'Not Started'),
+        currentStationId: currentStation?.id,
+        progressPercentage,
+        isActive: barrel.status.includes('IN_PROGRESS'),
+        operationHistory: barrel.operation_logs || []
+      };
+    });
   }
 };
 
@@ -682,13 +955,33 @@ function LoginScreen() {
             fontSize: 12
           }}>
             <strong>Demo Users (password: any 3+ chars):</strong>
-            <ul style={{ margin: '8px 0 0 0', paddingLeft: 16 }}>
-              {users.map(user => (
-                <li key={user.id} style={{ margin: '4px 0' }}>
-                  <strong>{user.username}</strong> - {user.fullName} ({user.role})
-                </li>
-              ))}
-            </ul>
+            <div style={{ 
+              margin: '8px 0 0 0', 
+              display: 'grid', 
+              gridTemplateColumns: 'repeat(2, 1fr)', 
+              gap: '4px' 
+            }}>
+              {users.filter(u => u.role === 'operator' && u.username !== 'testuser').map((user, index) => {
+                const stationNames = ['Drilling', 'Reaming', 'Rifling', 'Heat Treat', 'Lapping', 'Honing', 'Fluting', 'Chambering', 'Inspection', 'Finishing', 'Final QC'];
+                const stationName = stationNames[index] || 'Unassigned';
+                return (
+                  <div key={user.id} style={{ fontSize: 11 }}>
+                    <strong>{user.username}</strong> → {stationName}
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ marginTop: 8, paddingTop: 8, borderTop: '1px solid #ddd' }}>
+              <div style={{ fontSize: 11 }}>
+                <strong>supervisor</strong> - Sarah Wilson (supervisor)
+              </div>
+              <div style={{ fontSize: 11 }}>
+                <strong>admin</strong> - System Administrator (admin)
+              </div>
+              <div style={{ fontSize: 11, color: '#ff4d4f' }}>
+                <strong>testuser</strong> - Unassigned User (blocked access)
+              </div>
+            </div>
           </div>
         )}
 
@@ -713,35 +1006,102 @@ function AdminPanel() {
   const [activeTab, setActiveTab] = useState('users');
   const [users, setUsers] = useState<User[]>([]);
   const [stations] = useState<SimpleStation[]>(mockApiService.getStations());
-  const [assignments, setAssignments] = useState<StationAssignment[]>([]);
   const [barrels, setBarrels] = useState<SimpleBarrel[]>([]);
   const [analytics, setAnalytics] = useState<any>(null);
-  const [isLoading, setIsLoading] = useState(false);
+  const [isLoading, setIsLoading] = useState(true); // Start with loading state
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [newUserForm] = Form.useForm();
+  // Firebase config state
+  const [firebaseConfig, setFirebaseConfig] = useState(() => {
+    const stored = localStorage.getItem('firebase_config');
+    return stored ? JSON.parse(stored) : {
+      apiKey: '',
+      authDomain: '',
+      databaseURL: '',
+      projectId: ''
+    };
+  });
+  const [firebaseEnabled, setFirebaseEnabled] = useState(() => {
+    const stored = localStorage.getItem('firebase_enabled');
+    return stored ? JSON.parse(stored) : false;
+  });
+  const [firebaseEditMode, setFirebaseEditMode] = useState(false);
+
+  // Save Firebase config to localStorage and update state
+  const handleFirebaseConfigSave = (values: any) => {
+    setFirebaseConfig(values);
+    localStorage.setItem('firebase_config', JSON.stringify(values));
+    setFirebaseEditMode(false);
+  };
+  // Toggle Firebase sync
+  const handleFirebaseToggle = (enabled: boolean) => {
+    setFirebaseEnabled(enabled);
+    localStorage.setItem('firebase_enabled', JSON.stringify(enabled));
+    // Optionally reload or re-init sync here
+    window.location.reload();
+  };
 
   const loadAdminData = useCallback(async () => {
+    // Reduced logging frequency for admin data loads
+    if (!(window as any)._lastAdminLoadLog || Date.now() - (window as any)._lastAdminLoadLog > 60000) {
+      console.log('📊 loadAdminData called in admin panel');
+      (window as any)._lastAdminLoadLog = Date.now();
+    }
     setIsLoading(true);
     try {
-      const [usersData, assignmentsData, analyticsData, barrelsData] = await Promise.all([
-        Promise.resolve(mockApiService.getUsers()),
-        Promise.resolve(mockApiService.getStationAssignments()),
+      console.log('🔄 Starting admin data load...');
+      
+      // Force check for corrupted data by calling getUsers first
+      const allUsers = mockApiService.getUsers();
+      console.log('👥 Users loaded:', allUsers.length);
+      
+      // Filter users based on current user's role
+      const currentUser = mockApiService.getCurrentUser();
+      let usersData = allUsers;
+      
+      if (currentUser?.role === 'supervisor') {
+        // Supervisors can only see operators and themselves
+        usersData = allUsers.filter(user => 
+          user.role === 'operator' || user.id === currentUser.id
+        );
+      }
+      // Admins can see all users (no filtering needed)
+      
+      const [analyticsData, barrelsData] = await Promise.all([
         mockApiService.getSystemAnalytics(),
         mockApiService.getBarrels()
       ]);
+      
+      console.log('📊 Analytics data:', analyticsData);
+      console.log('🏭 Barrels data:', barrelsData.length);
+      
+      console.log('📊 Admin data loaded:', {
+        users: usersData.length,
+        barrels: barrelsData.length,
+        activeBarrels: barrelsData.filter(b => b.status.includes('IN_PROGRESS')).length,
+        barrelStatuses: barrelsData.map(b => ({ id: b.id, status: b.status })),
+        analytics: analyticsData
+      });
+      
       setUsers(usersData);
-      setAssignments(assignmentsData);
       setAnalytics(analyticsData);
       setBarrels(barrelsData);
+      
+      console.log('✅ Admin data state updated successfully');
     } catch (error) {
-      notification.error({ message: 'Error loading admin data' });
+      console.error('❌ Error loading admin data:', error);
+      notification.error({ 
+        message: 'Error loading admin data', 
+        description: String(error) 
+      });
     } finally {
       setIsLoading(false);
     }
   }, []);
 
   useEffect(() => {
+    // Load data immediately on mount
     loadAdminData();
   }, [loadAdminData]);
 
@@ -753,9 +1113,9 @@ function AdminPanel() {
     return unsubscribe;
   }, [loadAdminData]);
 
-  // Add frequent polling for admin panel
+  // Add polling for admin panel - reduced frequency for better performance
   useEffect(() => {
-    const interval = setInterval(() => { loadAdminData(); }, 5000);
+    const interval = setInterval(() => { loadAdminData(); }, 15000); // Reduced from 5s to 15s
     return () => clearInterval(interval);
   }, [loadAdminData]);
 
@@ -798,6 +1158,54 @@ function AdminPanel() {
     });
   };
 
+  const handleImpersonateUser = async (user: User) => {
+    try {
+      Modal.confirm({
+        title: 'Impersonate User',
+        content: (
+          <div>
+            <p>You are about to impersonate:</p>
+            <p><strong>{user.fullName}</strong> ({user.username})</p>
+            <p style={{ color: '#fa8c16', marginTop: 12 }}>
+              ⚠️ You will see the system from their perspective. 
+              Use the "Stop Impersonation" button to return to your admin account.
+            </p>
+          </div>
+        ),
+        okText: 'Start Impersonation',
+        cancelText: 'Cancel',
+        okType: 'primary',
+        zIndex: 9999,
+        maskClosable: false,
+        keyboard: true,
+        centered: true,
+        width: 500,
+        onOk: async () => {
+          try {
+            await mockApiService.impersonateUser(user.id);
+            notification.success({ 
+              message: 'Impersonation Started',
+              description: `You are now logged in as ${user.fullName}. Click "Stop Impersonation" to return.`,
+              duration: 6
+            });
+            // Reload the page to show the user's perspective
+            window.location.reload();
+          } catch (error) {
+            notification.error({ 
+              message: 'Impersonation Failed', 
+              description: error instanceof Error ? error.message : 'Unknown error' 
+            });
+          }
+        }
+      });
+    } catch (error) {
+      notification.error({ 
+        message: 'Impersonation Error', 
+        description: error instanceof Error ? error.message : 'Unknown error' 
+      });
+    }
+  };
+
   const handleStationAssignment = async (userId: string, stationId: string, assigned: boolean) => {
     try {
       if (assigned) {
@@ -807,6 +1215,39 @@ function AdminPanel() {
         await mockApiService.removeStationAssignment(userId, stationId);
         notification.success({ message: 'Station assignment removed!' });
       }
+      
+      // Force immediate reload and sync
+      loadAdminData();
+      mockApiService.broadcastChange('station_assignments');
+      
+    } catch (error) {
+      notification.error({ message: 'Failed to update station assignment' });
+    }
+  };
+
+  const handleDirectStationAssignment = async (stationId: string, userId: string | null) => {
+    try {
+      // First, remove any existing assignment for this station
+      const currentOperator = mockApiService.getStationOperator(stationId);
+      if (currentOperator) {
+        await mockApiService.removeStationAssignment(currentOperator.id, stationId);
+      }
+      
+      // Then assign new user if provided
+      if (userId) {
+        await mockApiService.assignUserToStation(userId, stationId);
+        const user = users.find(u => u.id === userId);
+        notification.success({ 
+          message: 'Station assignment updated!', 
+          description: `${user?.fullName} assigned to station ${stationId}` 
+        });
+      } else {
+        notification.success({ 
+          message: 'Station assignment cleared!', 
+          description: `Station ${stationId} is now unassigned` 
+        });
+      }
+      
       loadAdminData();
     } catch (error) {
       notification.error({ message: 'Failed to update station assignment' });
@@ -860,8 +1301,16 @@ function AdminPanel() {
                   key={station.id}
                   size="small"
                   type={isAssigned ? 'primary' : 'default'}
-                  onClick={() => handleStationAssignment(record.id, station.id, !isAssigned)}
+                  onClick={async () => {
+                    const button = document.querySelector(`[data-station="${station.id}-${record.id}"]`) as HTMLButtonElement;
+                    if (button) button.style.opacity = '0.5';
+                    
+                    await handleStationAssignment(record.id, station.id, !isAssigned);
+                    
+                    if (button) button.style.opacity = '1';
+                  }}
                   style={{ marginBottom: 4 }}
+                  data-station={`${station.id}-${record.id}`}
                 >
                   {station.name}
                 </Button>
@@ -874,24 +1323,41 @@ function AdminPanel() {
     {
       title: 'Actions',
       key: 'actions',
-      render: (_: any, record: User) => (
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button
-            size="small"
-            onClick={() => setEditingUser(record)}
-          >
-            Edit
-          </Button>
-          <Button
-            size="small"
-            danger
-            onClick={() => handleDeleteUser(record.id)}
-            disabled={record.username === 'admin'}
-          >
-            Delete
-          </Button>
-        </div>
-      )
+      render: (_: any, record: User) => {
+        const currentUser = mockApiService.getCurrentUser();
+        const canImpersonate = currentUser && 
+          (currentUser.role === 'admin' || currentUser.role === 'supervisor') &&
+          record.id !== currentUser.id; // Can't impersonate yourself
+        
+        return (
+          <div style={{ display: 'flex', gap: 8 }}>
+            <Button
+              size="small"
+              onClick={() => setEditingUser(record)}
+            >
+              Edit
+            </Button>
+            {canImpersonate && (
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => handleImpersonateUser(record)}
+                style={{ background: '#fa8c16', borderColor: '#fa8c16' }}
+              >
+                Login As
+              </Button>
+            )}
+            <Button
+              size="small"
+              danger
+              onClick={() => handleDeleteUser(record.id)}
+              disabled={record.username === 'admin'}
+            >
+              Delete
+            </Button>
+          </div>
+        );
+      }
     }
   ];
 
@@ -912,6 +1378,40 @@ function AdminPanel() {
           <span style={{ color: '#999' }}>Unassigned</span>
         );
       }
+    },
+    {
+      title: 'Change Assignment',
+      key: 'actions',
+      width: 220,
+      render: (_: any, record: SimpleStation) => {
+        const currentOperator = mockApiService.getStationOperator(record.id);
+        const availableUsers = users.filter(u => u.isActive && (u.role === 'operator' || u.role === 'supervisor'));
+        
+        return (
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Select
+              key={`station-${record.id}-${users.length}`} // Force re-render when users change
+              style={{ width: 200 }}
+              placeholder="Select operator"
+              value={currentOperator?.id || null}
+              onChange={(userId) => handleDirectStationAssignment(record.id, userId)}
+              allowClear
+              onClear={() => handleDirectStationAssignment(record.id, null)}
+              showSearch
+              filterOption={(input, option) => {
+                const label = option?.label || option?.children;
+                return String(label).toLowerCase().includes(input.toLowerCase());
+              }}
+            >
+              {availableUsers.map(user => (
+                <Select.Option key={user.id} value={user.id}>
+                  {user.fullName} ({user.username})
+                </Select.Option>
+              ))}
+            </Select>
+          </div>
+        );
+      }
     }
   ];
 
@@ -928,8 +1428,63 @@ function AdminPanel() {
         <div style={{ fontSize: 24, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 16 }}>
           <AppstoreOutlined />
           Admin Panel
+          {mockApiService.getCurrentUser()?.role === 'supervisor' && (
+            <span style={{ 
+              fontSize: 12, 
+              fontWeight: 400, 
+              background: 'rgba(255,255,255,0.2)',
+              padding: '2px 8px',
+              borderRadius: 4
+            }}>
+              Supervisor View - Operators Only
+            </span>
+          )}
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          {/* Impersonation indicator */}
+          {mockApiService.isImpersonating() && (
+            <div style={{
+              background: '#fa8c16',
+              color: '#fff',
+              padding: '4px 12px',
+              borderRadius: 20,
+              fontSize: 12,
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8
+            }}>
+              🎭 IMPERSONATING: {mockApiService.getCurrentUser()?.fullName}
+              <Button
+                size="small"
+                onClick={async () => {
+                  try {
+                    const originalUser = await mockApiService.stopImpersonation();
+                    if (originalUser) {
+                      notification.success({
+                        message: 'Impersonation Stopped',
+                        description: `Returned to ${originalUser.fullName} account.`
+                      });
+                      window.location.reload();
+                    }
+                  } catch (error) {
+                    notification.error({ message: 'Failed to stop impersonation' });
+                  }
+                }}
+                style={{
+                  background: '#fff',
+                  color: '#fa8c16',
+                  border: 'none',
+                  height: 20,
+                  fontSize: 10,
+                  padding: '0 8px'
+                }}
+              >
+                STOP
+              </Button>
+            </div>
+          )}
+          
           {/* User information */}
           <div style={{ 
             display: 'flex', 
@@ -947,8 +1502,12 @@ function AdminPanel() {
             <span style={{ opacity: 0.7 }}>
               ({mockApiService.getCurrentUser()?.role || 'guest'})
             </span>
+            {mockApiService.isImpersonating() && (
+              <span style={{ color: '#ffd666', fontSize: 11 }}>
+                [Original: {mockApiService.getOriginalUser()?.fullName}]
+              </span>
+            )}
           </div>
-          
           <Button 
             icon={<ReloadOutlined />} 
             onClick={loadAdminData} 
@@ -957,6 +1516,21 @@ function AdminPanel() {
             ghost
           >
             Refresh
+          </Button>
+          <Button 
+            onClick={() => {
+              if (window.confirm('Reset all data to defaults? This will clear localStorage.')) {
+                localStorage.removeItem('users');
+                localStorage.removeItem('station_assignments');
+                localStorage.removeItem('barrels');
+                window.location.reload();
+              }
+            }}
+            type="primary"
+            ghost
+            danger
+          >
+            Reset Data
           </Button>
           <Button 
             icon={<ExclamationCircleOutlined />} 
@@ -974,15 +1548,70 @@ function AdminPanel() {
           </Button>
         </div>
       </Header>
-      
+
+      {/* --- Firebase Config Section --- */}
       <Content style={{ margin: 24 }}>
+        <Card style={{ marginBottom: 24, background: '#fffbe6', border: '1px solid #ffe58f' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+            <div>
+              <div style={{ fontWeight: 600, fontSize: 16, marginBottom: 4 }}>Cloud Sync (Firebase)</div>
+              <div style={{ fontSize: 13, color: '#ad8b00' }}>
+                {firebaseEnabled ? '✅ Connected to Firebase (cloud sync enabled)' : '❌ Not connected (local-only mode)'}
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button
+                type={firebaseEnabled ? 'default' : 'primary'}
+                onClick={() => handleFirebaseToggle(!firebaseEnabled)}
+                style={firebaseEnabled ? { background: '#fff', color: '#faad14', borderColor: '#faad14' } : { background: '#faad14', borderColor: '#faad14', color: '#fff' }}
+              >
+                {firebaseEnabled ? 'Disable Sync' : 'Enable Sync'}
+              </Button>
+              <Button
+                onClick={() => setFirebaseEditMode(!firebaseEditMode)}
+                type="default"
+              >
+                {firebaseEditMode ? 'Cancel' : 'Edit Config'}
+              </Button>
+            </div>
+          </div>
+          {firebaseEditMode && (
+            <Form
+              layout="vertical"
+              initialValues={firebaseConfig}
+              onFinish={handleFirebaseConfigSave}
+              style={{ marginTop: 16, maxWidth: 500 }}
+            >
+              <Form.Item label="API Key" name="apiKey" rules={[{ required: true, message: 'Required' }]}> <Input /> </Form.Item>
+              <Form.Item label="Auth Domain" name="authDomain" rules={[{ required: true, message: 'Required' }]}> <Input /> </Form.Item>
+              <Form.Item label="Database URL" name="databaseURL" rules={[{ required: true, message: 'Required' }]}> <Input /> </Form.Item>
+              <Form.Item label="Project ID" name="projectId" rules={[{ required: true, message: 'Required' }]}> <Input /> </Form.Item>
+              <Form.Item>
+                <Button type="primary" htmlType="submit">Save Config</Button>
+              </Form.Item>
+            </Form>
+          )}
+        </Card>
+        
+        {/* Debug Information */}
+        {process.env.NODE_ENV === 'development' && (
+          <Card style={{ marginBottom: 16, background: '#f6ffed', border: '1px solid #b7eb8f' }}>
+            <div style={{ fontSize: 12, color: '#52c41a' }}>
+              Debug: Users: {users.length}, 
+              Analytics: {analytics ? 'loaded' : 'loading'}, 
+              Barrels: {barrels.length},
+              Loading: {isLoading.toString()}
+            </div>
+          </Card>
+        )}
+        
         {/* Analytics Overview */}
         <Row gutter={24} style={{ marginBottom: 24 }}>
           <Col span={4}>
             <Card>
               <Statistic 
                 title="Total Users" 
-                value={analytics?.totalUsers || 0} 
+                value={analytics?.totalUsers || users.length || 0} 
                 prefix={<PlayCircleOutlined />} 
               />
             </Card>
@@ -991,7 +1620,7 @@ function AdminPanel() {
             <Card>
               <Statistic 
                 title="Active Users" 
-                value={analytics?.activeUsers || 0} 
+                value={analytics?.activeUsers || users.filter(u => u.isActive).length || 0} 
                 prefix={<CheckCircleOutlined />} 
               />
             </Card>
@@ -1000,7 +1629,7 @@ function AdminPanel() {
             <Card>
               <Statistic 
                 title="Active Operators" 
-                value={analytics?.activeOperators || 0} 
+                value={analytics?.activeOperators || users.filter(u => u.isActive && u.role === 'operator').length || 0} 
                 prefix={<ClockCircleOutlined />} 
               />
             </Card>
@@ -1040,7 +1669,7 @@ function AdminPanel() {
         {/* Tab Navigation */}
         <Card>
           <div style={{ marginBottom: 16 }}>
-            <Button.Group>
+            <Space.Compact>
               <Button 
                 type={activeTab === 'users' ? 'primary' : 'default'}
                 onClick={() => setActiveTab('users')}
@@ -1056,6 +1685,13 @@ function AdminPanel() {
                 Station Assignments
               </Button>
               <Button 
+                type={activeTab === 'tracking' ? 'primary' : 'default'}
+                onClick={() => setActiveTab('tracking')}
+                style={activeTab === 'tracking' ? { background: '#722ed1', borderColor: '#722ed1' } : {}}
+              >
+                Barrel Tracking
+              </Button>
+              <Button 
                 type={activeTab === 'activity' ? 'primary' : 'default'}
                 onClick={() => setActiveTab('activity')}
                 style={activeTab === 'activity' ? { background: '#722ed1', borderColor: '#722ed1' } : {}}
@@ -1069,30 +1705,63 @@ function AdminPanel() {
               >
                 Active Operations
               </Button>
-            </Button.Group>
+            </Space.Compact>
           </div>
 
           {/* Users Tab */}
           {activeTab === 'users' && (
-            <Table
-              dataSource={users}
-              columns={userColumns}
-              rowKey="id"
-              loading={isLoading}
-              pagination={{ pageSize: 10 }}
-              scroll={{ x: 1200 }}
-            />
+            <div>
+              {mockApiService.getCurrentUser()?.role === 'supervisor' && (
+                <div style={{ 
+                  marginBottom: 16, 
+                  padding: 12, 
+                  background: '#fff7e6', 
+                  border: '1px solid #ffd591',
+                  borderRadius: 6,
+                  fontSize: 13
+                }}>
+                  <strong>📋 Supervisor View:</strong> You can only see and impersonate operator accounts. 
+                  Admins and other supervisors are hidden for security.
+                </div>
+              )}
+              <Table
+                dataSource={users}
+                columns={userColumns}
+                rowKey="id"
+                loading={isLoading}
+                pagination={{ pageSize: 10 }}
+                scroll={{ x: 1200 }}
+              />
+            </div>
           )}
 
           {/* Stations Tab */}
           {activeTab === 'stations' && (
-            <Table
-              dataSource={stations}
-              columns={stationColumns}
-              rowKey="id"
-              loading={isLoading}
-              pagination={false}
-            />
+            <div>
+              <div style={{ 
+                marginBottom: 16, 
+                padding: 16, 
+                background: '#f0f2ff', 
+                borderRadius: 8,
+                border: '1px solid #d6e4ff'
+              }}>
+                <div style={{ fontWeight: 600, marginBottom: 8, color: '#1677ff' }}>
+                  📍 Station Assignment Management
+                </div>
+                <div style={{ fontSize: 13, color: '#666', lineHeight: 1.5 }}>
+                  Use the dropdown menus to assign operators to stations. Changes are saved automatically.
+                  Only active operators and supervisors can be assigned to stations.
+                </div>
+              </div>
+              
+              <Table
+                dataSource={stations}
+                columns={stationColumns}
+                rowKey="id"
+                loading={isLoading}
+                pagination={false}
+              />
+            </div>
           )}
 
           {/* Activity Tab */}
@@ -1118,31 +1787,59 @@ function AdminPanel() {
           {activeTab === 'operations' && (
             <div>
               <h3>🔥 Currently Active Operations</h3>
-              {barrels.filter(b => b.status.includes('IN_PROGRESS')).length > 0 ? (
+              <div style={{ marginBottom: 16 }}>
+                <Button 
+                  icon={<ReloadOutlined />} 
+                  onClick={() => {
+                    console.log('🔄 Manual refresh triggered in admin panel');
+                    loadAdminData();
+                  }}
+                  type="primary"
+                  size="small"
+                >
+                  Refresh Now
+                </Button>
+                <span style={{ marginLeft: 16, fontSize: 12, color: '#666' }}>
+                  Last updated: {new Date().toLocaleTimeString()}
+                </span>
+              </div>
+              {(() => {
+                const activeBarrels = barrels.filter(b => b.status.includes('IN_PROGRESS'));
+                // Reduced debug logging frequency
+                if (!(window as any)._lastActiveOpsLog || Date.now() - (window as any)._lastActiveOpsLog > 30000) {
+                  console.log('🔍 Active Operations Debug:');
+                  console.log('📊 Total barrels:', barrels.length);
+                  console.log('🔥 Active barrels:', activeBarrels.length);
+                  console.log('📋 All barrel statuses:', barrels.map(b => ({ id: b.id, status: b.status, operator: b.current_operator_name })));
+                  console.log('⚡ Active barrel details:', activeBarrels);
+                  (window as any)._lastActiveOpsLog = Date.now();
+                }
+                return activeBarrels.length > 0;
+              })() ? (
                 <Row gutter={[16, 16]} style={{ marginTop: 16 }}>
                   {barrels
                     .filter(b => b.status.includes('IN_PROGRESS'))
                     .map(barrel => {
                       const stationName = barrel.status.replace('_IN_PROGRESS', '').replace(/_/g, ' ');
-                      const isCurrentUser = mockApiService.isCurrentOperator(barrel);
+                      const station = stations.find(s => s.name.toUpperCase() === stationName);
                       
                       return (
                         <Col span={8} key={barrel.id}>
                           <Card 
                             size="small"
                             style={{ 
-                              border: isCurrentUser ? '2px solid #52c41a' : '2px solid #722ed1',
-                              backgroundColor: isCurrentUser ? '#f6ffed' : '#f9f0ff'
+                              border: '2px solid #722ed1',
+                              backgroundColor: '#f9f0ff'
                             }}
                           >
                             <div style={{ textAlign: 'center' }}>
                               <div style={{ 
                                 fontSize: 18, 
                                 fontWeight: 'bold',
-                                color: isCurrentUser ? '#52c41a' : '#722ed1',
+                                color: '#722ed1',
                                 marginBottom: 12
                               }}>
-                                🔧 {stationName}
+                                🔧 {station?.name || stationName}
                               </div>
                               <div style={{ fontSize: 16, marginBottom: 8 }}>
                                 <strong>Barrel #{barrel.id}</strong>
@@ -1163,13 +1860,13 @@ function AdminPanel() {
                                 marginBottom: 8,
                                 padding: '4px 8px',
                                 borderRadius: 4,
-                                background: isCurrentUser ? '#e6fffb' : '#f0f5ff'
+                                background: '#f0f5ff'
                               }}>
                                 <span style={{ 
-                                  color: isCurrentUser ? '#52c41a' : '#722ed1',
+                                  color: '#722ed1',
                                   fontWeight: 600 
                                 }}>
-                                  {isCurrentUser ? '👤 You' : `👥 ${barrel.current_operator_name || 'Unknown'}`}
+                                  👥 {barrel.current_operator_name || 'Unknown Operator'}
                                 </span>
                               </div>
                               <div style={{ 
@@ -1200,8 +1897,189 @@ function AdminPanel() {
                   <div style={{ fontSize: 48, marginBottom: 16 }}>⏸️</div>
                   <h3>No Active Operations</h3>
                   <p>All stations are currently idle. Operations will appear here when started.</p>
+                  <div style={{ 
+                    fontSize: 12, 
+                    color: '#666', 
+                    marginTop: 16,
+                    padding: 12,
+                    background: '#e6f4ff',
+                    borderRadius: 4,
+                    border: '1px solid #91d5ff'
+                  }}>
+                    💡 <strong>How to test:</strong> Open another browser tab, log in as "drill_op" or "ream_op", 
+                    and start a drilling operation. This panel should update automatically via cross-tab sync.
+                  </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Add new Barrel Tracking Tab */}
+          {activeTab === 'tracking' && (
+            <div>
+              <h3>📊 Barrel Process Tracking</h3>
+              <div style={{ marginBottom: 16 }}>
+                <span style={{ color: '#666' }}>
+                  Real-time view of all barrels in the manufacturing process
+                </span>
+              </div>
+              <Table
+                dataSource={barrels}
+                rowKey="id"
+                loading={isLoading}
+                pagination={{ pageSize: 10 }}
+                columns={[
+                  { title: 'Barrel ID', dataIndex: 'id', key: 'id', width: 80 },
+                  { title: 'Caliber', dataIndex: 'caliber', key: 'caliber' },
+                  { 
+                    title: 'Specifications', 
+                    key: 'specs',
+                    render: (_, record) => (
+                      <span style={{ fontSize: 12 }}>
+                        {record.length_inches}" • {record.twist_rate} • {record.material}
+                      </span>
+                    )
+                  },
+                  { 
+                    title: 'Priority', 
+                    dataIndex: 'priority', 
+                    key: 'priority',
+                    render: (p: string) => (
+                      <span style={{ 
+                        fontWeight: 600,
+                        color: p === 'High' ? '#f5222d' : p === 'Medium' ? '#faad14' : '#52c41a'
+                      }}>
+                        {p}
+                      </span>
+                    )
+                  },
+                  { 
+                    title: 'Current Station', 
+                    key: 'currentStation',
+                    render: (_, record) => {
+                      const statusParts = record.status.split('_');
+                      const isInProgress = record.status.includes('IN_PROGRESS');
+                      const stationStatus = statusParts.slice(0, -1).join('_');
+                      const station = stations.find(s => 
+                        s.name.toUpperCase().replace(' ', '_') === stationStatus
+                      );
+                      
+                      if (record.status === 'COMPLETED') {
+                        return <span style={{ color: '#52c41a', fontWeight: 600 }}>✅ Completed</span>;
+                      }
+                      
+                      return (
+                        <div>
+                          <span style={{ fontWeight: 600 }}>
+                            {station?.name || 'Unknown'}
+                          </span>
+                          {isInProgress && (
+                            <span style={{ 
+                              marginLeft: 8,
+                              color: '#1677ff',
+                              fontSize: 11,
+                              background: '#e6f7ff',
+                              padding: '2px 6px',
+                              borderRadius: 4
+                            }}>
+                              IN PROGRESS
+                            </span>
+                          )}
+                        </div>
+                      );
+                    }
+                  },
+                  { 
+                    title: 'Progress', 
+                    key: 'progress',
+                    render: (_, record) => {
+                      const statusParts = record.status.split('_');
+                      const stationStatus = statusParts.slice(0, -1).join('_');
+                      const currentStation = stations.find(s => 
+                        s.name.toUpperCase().replace(' ', '_') === stationStatus
+                      );
+                      
+                      const currentStationIndex = currentStation ? currentStation.sequence : 
+                        (record.status === 'COMPLETED' ? stations.length + 1 : 0);
+                      const progressPercentage = Math.round((currentStationIndex / (stations.length + 1)) * 100);
+                      
+                      return (
+                        <div style={{ width: 100 }}>
+                          <div style={{ 
+                            background: '#f0f0f0', 
+                            borderRadius: 4, 
+                            overflow: 'hidden',
+                            height: 8
+                          }}>
+                            <div style={{ 
+                              background: record.status === 'COMPLETED' ? '#52c41a' : '#1677ff', 
+                              width: `${progressPercentage}%`,
+                              height: '100%',
+                              transition: 'width 0.3s ease'
+                            }} />
+                          </div>
+                          <div style={{ fontSize: 11, textAlign: 'center', marginTop: 2 }}>
+                            {progressPercentage}%
+                          </div>
+                        </div>
+                      );
+                    }
+                  },
+                  { 
+                    title: 'Operator', 
+                    dataIndex: 'current_operator_name',
+                    key: 'operator',
+                    render: (name: string) => name ? (
+                      <span style={{ color: '#1677ff' }}>👤 {name}</span>
+                    ) : (
+                      <span style={{ color: '#999' }}>—</span>
+                    )
+                  },
+                  {
+                    title: 'View',
+                    key: 'actions',
+                    render: (_: any, record: any) => (
+                      <Button 
+                        size="small"
+                        onClick={() => {
+                          Modal.info({
+                            title: `Barrel #${record.id} Details`,
+                            width: 600,
+                            content: (
+                              <div>
+                                <Card size="small" style={{ marginBottom: 16 }}>
+                                  <div><strong>Specifications:</strong></div>
+                                  <div>{record.caliber} • {record.length_inches}" • {record.twist_rate}</div>
+                                  <div>{record.material}</div>
+                                </Card>
+                                
+                                <div style={{ fontWeight: 600, marginBottom: 8 }}>Operation History:</div>
+                                {record.operationHistory && record.operationHistory.length > 0 ? (
+                                  record.operationHistory.map((log: any, index: number) => (
+                                    <Card key={index} size="small" style={{ marginBottom: 8 }}>
+                                      <div style={{ fontWeight: 600 }}>{log.station_name}</div>
+                                      <div style={{ fontSize: 12, color: '#666' }}>
+                                        Operator: {log.operator_name}<br/>
+                                        Started: {new Date(log.start_time).toLocaleString()}<br/>
+                                        {log.end_time && `Completed: ${new Date(log.end_time).toLocaleString()}`}
+                                        {log.notes && <><br/>Notes: {log.notes}</>}
+                                      </div>
+                                    </Card>
+                                  ))
+                                ) : (
+                                  <p>No operation history available</p>
+                                )}
+                              </div>
+                            )
+                          });
+                        }}
+                      >
+                        Details
+                      </Button>
+                    )
+                  }
+                ]}
+              />
             </div>
           )}
         </Card>
@@ -1236,19 +2114,19 @@ function AdminPanel() {
               <Col span={12}>
                 <Form.Item label="Role" name="role" rules={[{ required: true }]}>
                   <Select>
-                    <Option value="operator">Operator</Option>
-                    <Option value="supervisor">Supervisor</Option>
-                    <Option value="admin">Admin</Option>
+                    <Select.Option value="operator">Operator</Select.Option>
+                    <Select.Option value="supervisor">Supervisor</Select.Option>
+                    <Select.Option value="admin">Admin</Select.Option>
                   </Select>
                 </Form.Item>
               </Col>
               <Col span={12}>
                 <Form.Item label="Department" name="department" rules={[{ required: true }]}>
                   <Select>
-                    <Option value="Manufacturing">Manufacturing</Option>
-                    <Option value="Quality Control">Quality Control</Option>
-                    <Option value="Engineering">Engineering</Option>
-                    <Option value="IT">IT</Option>
+                    <Select.Option value="Manufacturing">Manufacturing</Select.Option>
+                    <Select.Option value="Quality Control">Quality Control</Select.Option>
+                    <Select.Option value="Engineering">Engineering</Select.Option>
+                    <Select.Option value="IT">IT</Select.Option>
                   </Select>
                 </Form.Item>
               </Col>
@@ -1256,8 +2134,8 @@ function AdminPanel() {
             
             <Form.Item label="Status" name="isActive" initialValue={true}>
               <Select>
-                <Option value={true}>Active</Option>
-                <Option value={false}>Inactive</Option>
+                <Select.Option value={true}>Active</Select.Option>
+                <Select.Option value={false}>Inactive</Select.Option>
               </Select>
             </Form.Item>
             
@@ -1309,19 +2187,19 @@ function AdminPanel() {
                 <Col span={12}>
                   <Form.Item label="Role" name="role" rules={[{ required: true }]}>
                     <Select>
-                      <Option value="operator">Operator</Option>
-                      <Option value="supervisor">Supervisor</Option>
-                      <Option value="admin">Admin</Option>
+                      <Select.Option value="operator">Operator</Select.Option>
+                      <Select.Option value="supervisor">Supervisor</Select.Option>
+                      <Select.Option value="admin">Admin</Select.Option>
                     </Select>
                   </Form.Item>
                 </Col>
                 <Col span={12}>
                   <Form.Item label="Department" name="department" rules={[{ required: true }]}>
                     <Select>
-                      <Option value="Manufacturing">Manufacturing</Option>
-                      <Option value="Quality Control">Quality Control</Option>
-                      <Option value="Engineering">Engineering</Option>
-                      <Option value="IT">IT</Option>
+                      <Select.Option value="Manufacturing">Manufacturing</Select.Option>
+                      <Select.Option value="Quality Control">Quality Control</Select.Option>
+                      <Select.Option value="Engineering">Engineering</Select.Option>
+                      <Select.Option value="IT">IT</Select.Option>
                     </Select>
                   </Form.Item>
                 </Col>
@@ -1329,8 +2207,8 @@ function AdminPanel() {
               
               <Form.Item label="Status" name="isActive">
                 <Select>
-                  <Option value={true}>Active</Option>
-                  <Option value={false}>Inactive</Option>
+                  <Select.Option value={true}>Active</Select.Option>
+                  <Select.Option value={false}>Inactive</Select.Option>
                 </Select>
               </Form.Item>
               
@@ -1358,10 +2236,45 @@ function AdminPanel() {
 
 // --- MAIN APP COMPONENT ---
 const { Header, Content, Sider } = Layout;
-const { Option } = Select;
 
 function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
+  // Initialize cross-tab sync on app startup
+  useEffect(() => {
+    mockApiService.initSync();
+  }, []);
   const [currentUser] = useState<User | null>(mockApiService.getCurrentUser());
+  const [showBarrelTracking, setShowBarrelTracking] = useState(false);
+  const [barrelTrackingData, setBarrelTrackingData] = useState<any[]>([]);
+  
+  // Security function to check if current user can access a specific station
+  const canAccessStation = (stationId: string): boolean => {
+    if (!currentUser) return false;
+    
+    // Admins and supervisors have access to all stations
+    if (currentUser.role === 'admin' || currentUser.role === 'supervisor') {
+      return true;
+    }
+    
+    // Operators can only access assigned stations
+    const assignedStations = mockApiService.getAssignedStations(currentUser.id);
+    return assignedStations.includes(stationId);
+  };
+  
+  // Get list of stations the current user can access
+  const getAccessibleStations = (): SimpleStation[] => {
+    if (!currentUser) return [];
+    
+    // Admins and supervisors see all stations
+    if (currentUser.role === 'admin' || currentUser.role === 'supervisor') {
+      return mockApiService.getStations();
+    }
+    
+    // Operators only see assigned stations
+    const assignedStations = mockApiService.getAssignedStations(currentUser.id);
+    return mockApiService.getStations().filter(station => 
+      assignedStations.includes(station.id)
+    );
+  };
   
   // Determine user's assigned station or return null if unassigned (admins have full access)
   const getUserAssignedStation = () => {
@@ -1373,6 +2286,7 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
     }
     
     const assignedStations = mockApiService.getAssignedStations(currentUser.id);
+    
     if (assignedStations.length > 0) {
       return assignedStations[0]; // Use first assigned station
     }
@@ -1382,7 +2296,21 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
   };
   
   const assignedStation = getUserAssignedStation();
-  const [selectedStation, setSelectedStation] = useState<string>(assignedStation || '1');
+  const accessibleStations = getAccessibleStations();
+  
+  // Reduced debug logging frequency
+  if (!(window as any)._lastUserAccessLog || Date.now() - (window as any)._lastUserAccessLog > 60000) {
+    console.log('🔍 User Access Debug:', {
+      currentUser: currentUser?.username,
+      role: currentUser?.role,
+      assignedStation,
+      accessibleStations: accessibleStations.map(s => s.name),
+      accessibleCount: accessibleStations.length
+    });
+    (window as any)._lastUserAccessLog = Date.now();
+  }
+  
+  const [selectedStation, setSelectedStation] = useState<string>(assignedStation || (accessibleStations[0]?.id || '1'));
   const [barrels, setBarrels] = useState<SimpleBarrel[]>([]);
   const [stations] = useState<SimpleStation[]>(mockApiService.getStations());
   const [activeBarrel, setActiveBarrel] = useState<string | null>(null);
@@ -1413,12 +2341,14 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [barrelsData, metricsData] = await Promise.all([
+      const [barrelsData, metricsData, trackingData] = await Promise.all([
         mockApiService.getBarrels(),
-        mockApiService.getMetrics()
+        mockApiService.getMetrics(),
+        mockApiService.getBarrelProcessInfo()
       ]);
       setBarrels(barrelsData);
       setMetrics(metricsData);
+      setBarrelTrackingData(trackingData);
       setLastSync(new Date()); // Update sync timestamp
     } catch (error) {
       notification.error({ message: 'Error loading data', description: 'Please check the connection.' });
@@ -1471,6 +2401,15 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
   const handleStartOperation = async (barrelId: string) => {
     const station = stations.find(s => s.id === selectedStation);
     if (!station) return;
+
+    // Security check: Verify user has access to this station
+    if (!canAccessStation(selectedStation)) {
+      notification.error({ 
+        message: 'Access Denied', 
+        description: `You are not authorized to operate ${station.name} station. Please contact your supervisor.` 
+      });
+      return;
+    }
 
     try {
       setIsLoading(true);
@@ -1547,6 +2486,15 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
       notification.error({ 
         message: 'Access Denied', 
         description: 'You can only complete operations that you started.' 
+      });
+      return;
+    }
+    
+    // Security check: Verify user has access to this station
+    if (!canAccessStation(selectedStation)) {
+      notification.error({ 
+        message: 'Access Denied', 
+        description: 'You are not authorized to operate this station. Please contact your supervisor.' 
       });
       return;
     }
@@ -1674,15 +2622,18 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
         const hasOwner = !!record.current_operator_id;
         
         if (record.status.includes('PENDING')) {
+          const canStartOperation = canAccessStation(selectedStation);
           return (
             <Button 
               type="primary"
               icon={<PlayCircleOutlined />}
               onClick={() => handleStartOperation(record.id)}
-              disabled={activeBarrel !== null || isLoading}
+              disabled={activeBarrel !== null || isLoading || !canStartOperation}
               size="small"
+              title={!canStartOperation ? 'You are not authorized to operate this station' : 'Start operation'}
             >
               Start
+              {!canStartOperation && <span style={{ marginLeft: 4 }}>🔒</span>}
             </Button>
           );
         } else if (record.status.includes('IN_PROGRESS')) {
@@ -1695,16 +2646,22 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
                     icon={<PauseCircleOutlined />}
                     onClick={handlePauseOperation}
                     size="small"
+                    disabled={!canAccessStation(selectedStation)}
+                    title={!canAccessStation(selectedStation) ? 'You are not authorized to operate this station' : 'Pause operation'}
                   >
                     Pause
+                    {!canAccessStation(selectedStation) && <span style={{ marginLeft: 4 }}>🔒</span>}
                   </Button>
                 ) : (
                   <Button 
                     icon={<PlayCircleOutlined />}
                     onClick={() => handleResumeOperation(record.id)}
                     size="small"
+                    disabled={!canAccessStation(selectedStation)}
+                    title={!canAccessStation(selectedStation) ? 'You are not authorized to operate this station' : 'Resume operation'}
                   >
                     Resume
+                    {!canAccessStation(selectedStation) && <span style={{ marginLeft: 4 }}>🔒</span>}
                   </Button>
                 )}
                 <Button 
@@ -1712,8 +2669,11 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
                   icon={<CheckCircleOutlined />}
                   onClick={() => handleCompleteOperation(record.id)}
                   size="small"
+                  disabled={!canAccessStation(selectedStation)}
+                  title={!canAccessStation(selectedStation) ? 'You are not authorized to operate this station' : 'Complete operation'}
                 >
                   Complete
+                  {!canAccessStation(selectedStation) && <span style={{ marginLeft: 4 }}>🔒</span>}
                 </Button>
               </div>
             );
@@ -1748,8 +2708,8 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
     }
   ];
 
-  // If user has no station assignments, show access denied screen (except for admins)
-  if (!assignedStation && currentUser?.role !== 'admin') {
+  // If user has no station assignments, show access denied screen (except for admins and supervisors)
+  if (!assignedStation && currentUser?.role === 'operator') {
     return (
       <Layout style={{ minHeight: '100vh', background: '#f5f5f5' }}>
         <div style={{ 
@@ -1825,6 +2785,26 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
     );
   }
 
+  // Security validation: Ensure user has access to currently selected station
+  React.useEffect(() => {
+    if (selectedStation && !canAccessStation(selectedStation)) {
+      // Reset to first accessible station or show error
+      const firstAccessible = accessibleStations[0];
+      if (firstAccessible) {
+        setSelectedStation(firstAccessible.id);
+        notification.warning({
+          message: 'Station Access Restricted',
+          description: `Redirected to ${firstAccessible.name} - your assigned station.`
+        });
+      } else {
+        notification.error({
+          message: 'No Station Access',
+          description: 'You are not assigned to any stations. Please contact your supervisor.'
+        });
+      }
+    }
+  }, [selectedStation, accessibleStations]);
+
   return (
     <Layout style={{ minHeight: '100vh' }}>
       <Sider breakpoint="lg" collapsedWidth="0" style={{ background: '#fff' }}>
@@ -1841,13 +2821,33 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
           <AppstoreOutlined style={{ fontSize: 32, color: '#1677ff', marginRight: 8 }} />
           MES Admin
         </div>
-        <Menu mode="inline" selectedKeys={[selectedStation]} onClick={e => setSelectedStation(e.key)}>
-          {stations.map(station => (
-            <Menu.Item key={station.id} icon={<BarChartOutlined />}>
-              {station.name}
-            </Menu.Item>
-          ))}
-        </Menu>
+        <Menu 
+          mode="inline" 
+          selectedKeys={[selectedStation]} 
+          onClick={e => {
+            // Security check: Only allow selection of accessible stations
+            if (canAccessStation(e.key)) {
+              setSelectedStation(e.key);
+            } else {
+              notification.error({
+                message: 'Access Denied',
+                description: 'You are not authorized to access this station.'
+              });
+            }
+          }}
+          items={accessibleStations.map(station => ({
+            key: station.id,
+            icon: <BarChartOutlined />,
+            label: (
+              <span>
+                {station.name}
+                {!canAccessStation(station.id) && (
+                  <span style={{ color: '#ff4d4f', fontSize: 10, marginLeft: 8 }}>🔒 LOCKED</span>
+                )}
+              </span>
+            )
+          }))}
+        />
       </Sider>
       
       <Layout>
@@ -1885,6 +2885,51 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
             </div>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {/* Impersonation indicator */}
+            {mockApiService.isImpersonating() && (
+              <div style={{
+                background: '#fa8c16',
+                color: '#fff',
+                padding: '4px 12px',
+                borderRadius: 20,
+                fontSize: 11,
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                animation: 'pulse 2s infinite'
+              }}>
+                🎭 IMPERSONATING
+                <Button
+                  size="small"
+                  onClick={async () => {
+                    try {
+                      const originalUser = await mockApiService.stopImpersonation();
+                      if (originalUser) {
+                        notification.success({
+                          message: 'Impersonation Stopped',
+                          description: `Returned to ${originalUser.fullName} account.`
+                        });
+                        window.location.reload();
+                      }
+                    } catch (error) {
+                      notification.error({ message: 'Failed to stop impersonation' });
+                    }
+                  }}
+                  style={{
+                    background: '#fff',
+                    color: '#fa8c16',
+                    border: 'none',
+                    height: 18,
+                    fontSize: 9,
+                    padding: '0 6px'
+                  }}
+                >
+                  STOP
+                </Button>
+              </div>
+            )}
+            
             {/* Sync Status */}
             <div style={{ 
               fontSize: 11, 
@@ -1914,6 +2959,11 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
               <span style={{ opacity: 0.7 }}>
                 ({currentUser?.role || 'guest'})
               </span>
+              {mockApiService.isImpersonating() && (
+                <span style={{ color: '#ffd666', fontSize: 11, marginLeft: 8 }}>
+                  [Originally: {mockApiService.getOriginalUser()?.fullName}]
+                </span>
+              )}
               {currentUser && (() => {
                 if (currentUser.role === 'admin') {
                   return (
@@ -1930,24 +2980,66 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
                   );
                 }
                 
-                const assignedStation = getUserAssignedStation();
-                if (assignedStation) {
-                  const station = stations.find(s => s.id === assignedStation);
+                if (currentUser.role === 'supervisor') {
                   return (
                     <span style={{ 
                       background: 'rgba(255,255,255,0.2)',
                       padding: '2px 6px',
                       borderRadius: 10,
                       fontSize: 11,
-                      marginLeft: 4
+                      marginLeft: 4,
+                      color: '#faad14'
                     }}>
-                      📍 {station?.name || `Station ${assignedStation}`}
+                      🔑 All Stations
                     </span>
                   );
                 }
-                return null;
+                
+                const assignedStations = mockApiService.getAssignedStations(currentUser.id);
+                if (assignedStations.length > 0) {
+                  const stationNames = assignedStations.map(id => {
+                    const station = stations.find(s => s.id === id);
+                    return station?.name || `Station ${id}`;
+                  });
+                  return (
+                    <span style={{ 
+                      background: canAccessStation(selectedStation) ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
+                      padding: '2px 6px',
+                      borderRadius: 10,
+                      fontSize: 11,
+                      marginLeft: 4,
+                      color: canAccessStation(selectedStation) ? '#22c55e' : '#ef4444'
+                    }}>
+                      📍 {stationNames.join(', ')}
+                      {canAccessStation(selectedStation) ? ' ✅' : ' 🔒'}
+                    </span>
+                  );
+                } else {
+                  return (
+                    <span style={{ 
+                      background: 'rgba(239, 68, 68, 0.2)',
+                      padding: '2px 6px',
+                      borderRadius: 10,
+                      fontSize: 11,
+                      marginLeft: 4,
+                      color: '#ef4444'
+                    }}>
+                      ⚠️ No Stations Assigned
+                    </span>
+                  );
+                }
               })()}
             </div>
+            
+            {/* Barrel Tracking button for all users */}
+            <Button 
+              icon={<BarChartOutlined />} 
+              onClick={() => setShowBarrelTracking(true)} 
+              type="primary"
+              ghost
+            >
+              Barrel Tracking
+            </Button>
             
             {/* Admin Panel Access */}
             {currentUser?.role === 'admin' && (
@@ -1982,6 +3074,46 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
         </Header>
         
         <Content style={{ margin: 24 }}>
+          {/* Security Warning Banner for Users Without Station Access */}
+          {currentUser && currentUser.role === 'operator' && accessibleStations.length === 0 && (
+            <div style={{
+              background: 'linear-gradient(90deg, #fee2e2 0%, #fecaca 100%)',
+              border: '1px solid #f87171',
+              borderRadius: 8,
+              padding: 16,
+              marginBottom: 24,
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: 18, fontWeight: 600, color: '#dc2626', marginBottom: 8 }}>
+                🚫 Station Access Required
+              </div>
+              <div style={{ color: '#7f1d1d', fontSize: 14 }}>
+                You are not currently assigned to any manufacturing stations. Contact your supervisor to request station access.
+                All manufacturing operations are restricted until station assignment is completed.
+              </div>
+            </div>
+          )}
+          
+          {/* Station Access Status for Operators */}
+          {currentUser && currentUser.role === 'operator' && accessibleStations.length > 0 && !canAccessStation(selectedStation) && (
+            <div style={{
+              background: 'linear-gradient(90deg, #fef3c7 0%, #fde68a 100%)',
+              border: '1px solid #f59e0b',
+              borderRadius: 8,
+              padding: 16,
+              marginBottom: 24,
+              textAlign: 'center'
+            }}>
+              <div style={{ fontSize: 16, fontWeight: 600, color: '#d97706', marginBottom: 8 }}>
+                ⚠️ Unauthorized Station Selected
+              </div>
+              <div style={{ color: '#92400e', fontSize: 14 }}>
+                You are viewing a station you're not authorized to operate. 
+                Your assigned stations: {accessibleStations.map(s => s.name).join(', ')}
+              </div>
+            </div>
+          )}
+          
           <Row gutter={24} style={{ marginBottom: 24 }}>
             <Col span={6}>
               <Card>
@@ -2025,7 +3157,7 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
           
           <Card 
             title={`${stations.find(s => s.id === selectedStation)?.name} Station`} 
-            bordered={false} 
+            variant="outlined"
             style={{ marginBottom: 24 }}
           >
             <Table
@@ -2140,12 +3272,12 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
             >
               <Form.Item label="Caliber" name="caliber" rules={[{ required: true }]}>
                 <Select>
-                  <Option value=".308 Winchester">.308 Winchester</Option>
-                  <Option value="6.5 Creedmoor">6.5 Creedmoor</Option>
-                  <Option value=".223 Wylde">.223 Wylde</Option>
-                  <Option value="6mm Creedmoor">6mm Creedmoor</Option>
-                  <Option value=".300 Win Mag">.300 Win Mag</Option>
-                  <Option value="6.5 PRC">6.5 PRC</Option>
+                  <Select.Option value=".308 Winchester">.308 Winchester</Select.Option>
+                  <Select.Option value="6.5 Creedmoor">6.5 Creedmoor</Select.Option>
+                  <Select.Option value=".223 Wylde">.223 Wylde</Select.Option>
+                  <Select.Option value="6mm Creedmoor">6mm Creedmoor</Select.Option>
+                  <Select.Option value=".300 Win Mag">.300 Win Mag</Select.Option>
+                  <Select.Option value="6.5 PRC">6.5 PRC</Select.Option>
                 </Select>
               </Form.Item>
               
@@ -2155,29 +3287,29 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
               
               <Form.Item label="Twist Rate" name="twist_rate" rules={[{ required: true }]}>
                 <Select>
-                  <Option value="1:7">1:7</Option>
-                  <Option value="1:8">1:8</Option>
-                  <Option value="1:9">1:9</Option>
-                  <Option value="1:10">1:10</Option>
-                  <Option value="1:11">1:11</Option>
-                  <Option value="1:12">1:12</Option>
+                  <Select.Option value="1:7">1:7</Select.Option>
+                  <Select.Option value="1:8">1:8</Select.Option>
+                  <Select.Option value="1:9">1:9</Select.Option>
+                  <Select.Option value="1:10">1:10</Select.Option>
+                  <Select.Option value="1:11">1:11</Select.Option>
+                  <Select.Option value="1:12">1:12</Select.Option>
                 </Select>
               </Form.Item>
               
               <Form.Item label="Material" name="material" rules={[{ required: true }]}>
                 <Select>
-                  <Option value="416R Stainless">416R Stainless</Option>
-                  <Option value="4140 Chrome Moly">4140 Chrome Moly</Option>
-                  <Option value="4150 Chrome Moly">4150 Chrome Moly</Option>
-                  <Option value="17-4 Stainless">17-4 Stainless</Option>
+                  <Select.Option value="416R Stainless">416R Stainless</Select.Option>
+                  <Select.Option value="4140 Chrome Moly">4140 Chrome Moly</Select.Option>
+                  <Select.Option value="4150 Chrome Moly">4150 Chrome Moly</Select.Option>
+                  <Select.Option value="17-4 Stainless">17-4 Stainless</Select.Option>
                 </Select>
               </Form.Item>
               
               <Form.Item label="Priority" name="priority" rules={[{ required: true }]}>
                 <Select>
-                  <Option value="Low">Low</Option>
-                  <Option value="Medium">Medium</Option>
-                  <Option value="High">High</Option>
+                  <Select.Option value="Low">Low</Select.Option>
+                  <Select.Option value="Medium">Medium</Select.Option>
+                  <Select.Option value="High">High</Select.Option>
                 </Select>
               </Form.Item>
               
@@ -2189,6 +3321,160 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
             </Form>
           </Modal>
           
+          {/* Barrel Tracking Modal for non-admin users */}
+          <Modal
+            title="📊 Barrel Process Tracking"
+            open={showBarrelTracking}
+            onCancel={() => setShowBarrelTracking(false)}
+            width={1200}
+            footer={[
+              <Button key="refresh" icon={<ReloadOutlined />} onClick={loadData}>
+                Refresh
+              </Button>,
+              <Button key="close" type="primary" onClick={() => setShowBarrelTracking(false)}>
+                Close
+              </Button>
+            ]}
+          >
+            <Table
+              dataSource={barrelTrackingData}
+              rowKey="id"
+              loading={isLoading}
+              pagination={{ pageSize: 10 }}
+              scroll={{ x: 1000 }}
+              columns={[
+                { title: 'ID', dataIndex: 'id', key: 'id', width: 60, fixed: 'left' },
+                { title: 'Caliber', dataIndex: 'caliber', key: 'caliber', width: 120 },
+                { 
+                  title: 'Priority', 
+                  dataIndex: 'priority', 
+                  key: 'priority',
+                  render: (p: string) => (
+                    <span style={{ 
+                      fontWeight: 600,
+                      color: p === 'High' ? '#f5222d' : p === 'Medium' ? '#faad14' : '#52c41a'
+                    }}>
+                      {p}
+                    </span>
+                  )
+                },
+                { 
+                  title: 'Current Station', 
+                  dataIndex: 'currentStation',
+                  key: 'currentStation',
+                  width: 150,
+                  render: (station: string, record: any) => (
+                    <div>
+                      <span style={{ fontWeight: 600 }}>{station}</span>
+                      {record.isActive && (
+                        <span style={{ 
+                          marginLeft: 8,
+                          color: '#1677ff',
+                          fontSize: 11,
+                          background: '#e6f7ff',
+                          padding: '2px 6px',
+                          borderRadius: 4
+                        }}>
+                          ACTIVE
+                        </span>
+                      )}
+                    </div>
+                  )
+                },
+                { 
+                  title: 'Progress', 
+                  key: 'progress',
+                  render: (_, record) => {
+                    const statusParts = record.status.split('_');
+                    const stationStatus = statusParts.slice(0, -1).join('_');
+                    const currentStation = stations.find(s => 
+                      s.name.toUpperCase().replace(' ', '_') === stationStatus
+                    );
+                    
+                    const currentStationIndex = currentStation ? currentStation.sequence : 
+                      (record.status === 'COMPLETED' ? stations.length + 1 : 0);
+                    const progressPercentage = Math.round((currentStationIndex / (stations.length + 1)) * 100);
+                    
+                    return (
+                      <div style={{ width: 100 }}>
+                        <div style={{ 
+                          background: '#f0f0f0', 
+                          borderRadius: 4, 
+                          overflow: 'hidden',
+                          height: 8
+                        }}>
+                          <div style={{ 
+                            background: record.status === 'COMPLETED' ? '#52c41a' : '#1677ff', 
+                            width: `${progressPercentage}%`,
+                            height: '100%',
+                            transition: 'width 0.3s ease'
+                          }} />
+                        </div>
+                        <div style={{ fontSize: 11, textAlign: 'center', marginTop: 2 }}>
+                          {progressPercentage}%
+                        </div>
+                      </div>
+                    );
+                  }
+                },
+                { 
+                  title: 'Operator', 
+                  dataIndex: 'current_operator_name',
+                  key: 'operator',
+                  width: 150,
+                  render: (name: string) => name ? (
+                    <span style={{ color: '#1677ff' }}>👤 {name}</span>
+                  ) : (
+                    <span style={{ color: '#999' }}>—</span>
+                  )
+                },
+                {
+                  title: 'View',
+                  key: 'actions',
+                  render: (_: any, record: any) => (
+                    <Button 
+                      size="small"
+                      onClick={() => {
+                        Modal.info({
+                          title: `Barrel #${record.id} Details`,
+                          width: 600,
+                          content: (
+                            <div>
+                              <Card size="small" style={{ marginBottom: 16 }}>
+                                <div><strong>Specifications:</strong></div>
+                                <div>{record.caliber} • {record.length_inches}" • {record.twist_rate}</div>
+                                <div>{record.material}</div>
+                              </Card>
+                              
+                              <div style={{ fontWeight: 600, marginBottom: 8 }}>Operation History:</div>
+                              {record.operationHistory && record.operationHistory.length > 0 ? (
+                                record.operationHistory.map((log: any, index: number) => (
+                                  <Card key={index} size="small" style={{ marginBottom: 8 }}>
+                                    <div style={{ fontWeight: 600 }}>{log.station_name}</div>
+                                    <div style={{ fontSize: 12, color: '#666' }}>
+                                      Operator: {log.operator_name}<br/>
+                                      Started: {new Date(log.start_time).toLocaleString()}<br/>
+                                      {log.end_time && `Completed: ${new Date(log.end_time).toLocaleString()}`}
+                                      {log.notes && <><br/>Notes: {log.notes}</>}
+                                    </div>
+                                  </Card>
+                                ))
+                              ) : (
+                                <p>No operation history available</p>
+                              )}
+                            </div>
+                          )
+                        });
+                      }}
+                    >
+                      Details
+                    </Button>
+                  )
+                }
+              ]}
+            />
+          </Modal>
+
           {isLoading && (
             <div style={{
               position: 'fixed',
