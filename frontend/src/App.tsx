@@ -32,11 +32,48 @@ import {
 
 const { Title } = Typography;
 import {
-  PlayCircleOutlined, PauseCircleOutlined, CheckCircleOutlined, PlusOutlined, ReloadOutlined, ExclamationCircleOutlined, ClockCircleOutlined, BarChartOutlined, AppstoreOutlined
+  PlayCircleOutlined, PauseCircleOutlined, CheckCircleOutlined, PlusOutlined, ReloadOutlined, ExclamationCircleOutlined, ClockCircleOutlined, BarChartOutlined, AppstoreOutlined, SafetyCertificateOutlined, StopOutlined, WarningOutlined, CheckSquareOutlined
 } from '@ant-design/icons';
 import 'antd/dist/reset.css';
 
 // --- TYPE DEFINITIONS ---
+// Quality Control & Inspection Types
+interface InspectionMeasurement {
+  name: string;
+  value: number;
+  unit: string;
+  min_spec: number;
+  max_spec: number;
+  passed: boolean;
+}
+
+interface Defect {
+  id: string;
+  type: 'surface' | 'dimensional' | 'material' | 'other';
+  severity: 'minor' | 'major' | 'critical';
+  description: string;
+  location?: string;
+  detected_by: string;
+  detected_at: string;
+  resolved?: boolean;
+  resolution_notes?: string;
+}
+
+interface InspectionRecord {
+  id: string;
+  barrel_id: string;
+  station_id: string;
+  station_name: string;
+  inspector_id: string;
+  inspector_name: string;
+  inspection_type: 'in_process' | 'final' | 'incoming';
+  measurements: InspectionMeasurement[];
+  defects: Defect[];
+  overall_result: 'pass' | 'fail' | 'conditional';
+  notes?: string;
+  created_at: string;
+}
+
 interface SimpleBarrel {
   id: string;
   caliber: string;
@@ -53,6 +90,12 @@ interface SimpleBarrel {
   current_operator_id?: string;
   current_operator_name?: string;
   current_tablet_id?: string;
+  // Quality Control fields
+  qc_status?: 'pending' | 'passed' | 'failed' | 'hold';
+  hold_reason?: string;
+  hold_date?: string;
+  held_by?: string;
+  inspections?: InspectionRecord[];
 }
 
 interface SimpleStation {
@@ -338,6 +381,112 @@ const mockApiService = {
         .sort((a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime())
         .slice(0, 10)
     };
+  },
+
+  // ============ QUALITY CONTROL & INSPECTION ============
+  
+  // Add an inspection record to a barrel
+  addInspection: async (barrelId: string, inspection: Omit<InspectionRecord, 'id' | 'created_at' | 'barrel_id'>): Promise<InspectionRecord> => {
+    const barrels = await mockApiService.getBarrels();
+    const barrel = barrels.find(b => b.id === barrelId);
+    if (!barrel) throw new Error('Barrel not found');
+    
+    const newInspection: InspectionRecord = {
+      ...inspection,
+      id: `insp_${Date.now()}`,
+      barrel_id: barrelId,
+      created_at: new Date().toISOString()
+    };
+    
+    if (!barrel.inspections) barrel.inspections = [];
+    barrel.inspections.push(newInspection);
+    
+    // Auto-update QC status based on inspection result
+    if (inspection.overall_result === 'fail') {
+      barrel.qc_status = 'failed';
+    } else if (inspection.overall_result === 'pass' && barrel.qc_status !== 'hold') {
+      barrel.qc_status = 'passed';
+    }
+    
+    await mockApiService.saveData('barrels', barrels);
+    return newInspection;
+  },
+  
+  // Place barrel on hold (quarantine)
+  placeBarrelOnHold: async (barrelId: string, reason: string): Promise<SimpleBarrel> => {
+    const barrels = await mockApiService.getBarrels();
+    const barrel = barrels.find(b => b.id === barrelId);
+    if (!barrel) throw new Error('Barrel not found');
+    
+    const user = mockApiService.getCurrentUser();
+    barrel.qc_status = 'hold';
+    barrel.hold_reason = reason;
+    barrel.hold_date = new Date().toISOString();
+    barrel.held_by = user?.fullName || 'Unknown';
+    
+    await mockApiService.saveData('barrels', barrels);
+    notification.warning({ message: `Barrel #${barrelId} placed on HOLD`, description: reason });
+    return barrel;
+  },
+  
+  // Release barrel from hold
+  releaseBarrelFromHold: async (barrelId: string, notes?: string): Promise<SimpleBarrel> => {
+    const barrels = await mockApiService.getBarrels();
+    const barrel = barrels.find(b => b.id === barrelId);
+    if (!barrel) throw new Error('Barrel not found');
+    
+    barrel.qc_status = 'pending';
+    barrel.hold_reason = undefined;
+    barrel.hold_date = undefined;
+    barrel.held_by = undefined;
+    
+    // Add a note to the last inspection if provided
+    if (notes && barrel.inspections && barrel.inspections.length > 0) {
+      const lastInspection = barrel.inspections[barrel.inspections.length - 1];
+      lastInspection.notes = (lastInspection.notes || '') + ` [RELEASED: ${notes}]`;
+    }
+    
+    await mockApiService.saveData('barrels', barrels);
+    notification.success({ message: `Barrel #${barrelId} released from hold` });
+    return barrel;
+  },
+  
+  // Get QC summary statistics
+  getQCStats: async () => {
+    const barrels = await mockApiService.getBarrels();
+    const totalInspections = barrels.reduce((sum, b) => sum + (b.inspections?.length || 0), 0);
+    const passedInspections = barrels.reduce((sum, b) => 
+      sum + (b.inspections?.filter(i => i.overall_result === 'pass').length || 0), 0);
+    const failedInspections = barrels.reduce((sum, b) => 
+      sum + (b.inspections?.filter(i => i.overall_result === 'fail').length || 0), 0);
+    const barrelsOnHold = barrels.filter(b => b.qc_status === 'hold').length;
+    
+    return {
+      totalInspections,
+      passedInspections,
+      failedInspections,
+      passRate: totalInspections > 0 ? Math.round((passedInspections / totalInspections) * 100) : 0,
+      barrelsOnHold,
+      barrelsAwaitingInspection: barrels.filter(b => !b.qc_status || b.qc_status === 'pending').length
+    };
+  },
+  
+  // Get all defects across barrels
+  getAllDefects: async (): Promise<(Defect & { barrel_id: string })[]> => {
+    const barrels = await mockApiService.getBarrels();
+    const allDefects: (Defect & { barrel_id: string })[] = [];
+    
+    barrels.forEach(barrel => {
+      barrel.inspections?.forEach(inspection => {
+        inspection.defects?.forEach(defect => {
+          allDefects.push({ ...defect, barrel_id: barrel.id });
+        });
+      });
+    });
+    
+    return allDefects.sort((a, b) => 
+      new Date(b.detected_at).getTime() - new Date(a.detected_at).getTime()
+    );
   },
 
   // Enhanced authentication methods with impersonation support
@@ -1011,6 +1160,7 @@ function AdminPanel() {
   const [isLoading, setIsLoading] = useState(true); // Start with loading state
   const [showUserForm, setShowUserForm] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  const [selectedBarrelDetails, setSelectedBarrelDetails] = useState<any | null>(null);
   const [newUserForm] = Form.useForm();
   // Firebase config state
   const [firebaseConfig, setFirebaseConfig] = useState(() => {
@@ -2041,38 +2191,7 @@ function AdminPanel() {
                     render: (_: any, record: any) => (
                       <Button 
                         size="small"
-                        onClick={() => {
-                          Modal.info({
-                            title: `Barrel #${record.id} Details`,
-                            width: 600,
-                            content: (
-                              <div>
-                                <Card size="small" style={{ marginBottom: 16 }}>
-                                  <div><strong>Specifications:</strong></div>
-                                  <div>{record.caliber} • {record.length_inches}" • {record.twist_rate}</div>
-                                  <div>{record.material}</div>
-                                </Card>
-                                
-                                <div style={{ fontWeight: 600, marginBottom: 8 }}>Operation History:</div>
-                                {record.operationHistory && record.operationHistory.length > 0 ? (
-                                  record.operationHistory.map((log: any, index: number) => (
-                                    <Card key={index} size="small" style={{ marginBottom: 8 }}>
-                                      <div style={{ fontWeight: 600 }}>{log.station_name}</div>
-                                      <div style={{ fontSize: 12, color: '#666' }}>
-                                        Operator: {log.operator_name}<br/>
-                                        Started: {new Date(log.start_time).toLocaleString()}<br/>
-                                        {log.end_time && `Completed: ${new Date(log.end_time).toLocaleString()}`}
-                                        {log.notes && <><br/>Notes: {log.notes}</>}
-                                      </div>
-                                    </Card>
-                                  ))
-                                ) : (
-                                  <p>No operation history available</p>
-                                )}
-                              </div>
-                            )
-                          });
-                        }}
+                        onClick={() => setSelectedBarrelDetails(record)}
                       >
                         Details
                       </Button>
@@ -2229,6 +2348,48 @@ function AdminPanel() {
             </Form>
           )}
         </Modal>
+
+        {/* Barrel Details Modal */}
+        <Modal
+          title={selectedBarrelDetails ? `Barrel #${selectedBarrelDetails.id} Details` : 'Barrel Details'}
+          open={selectedBarrelDetails !== null}
+          onCancel={() => setSelectedBarrelDetails(null)}
+          footer={[
+            <Button key="close" onClick={() => setSelectedBarrelDetails(null)}>
+              Close
+            </Button>
+          ]}
+          width={600}
+        >
+          {selectedBarrelDetails && (
+            <div>
+              <Card size="small" style={{ marginBottom: 16 }}>
+                <div><strong>Specifications:</strong></div>
+                <div>
+                  {selectedBarrelDetails.caliber} • {selectedBarrelDetails.length_inches}" • {selectedBarrelDetails.twist_rate}
+                </div>
+                <div>{selectedBarrelDetails.material}</div>
+              </Card>
+              
+              <div style={{ fontWeight: 600, marginBottom: 8 }}>Operation History:</div>
+              {selectedBarrelDetails.operationHistory && selectedBarrelDetails.operationHistory.length > 0 ? (
+                selectedBarrelDetails.operationHistory.map((log: any, index: number) => (
+                  <Card key={index} size="small" style={{ marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600 }}>{log.station_name}</div>
+                    <div style={{ fontSize: 12, color: '#666' }}>
+                      Operator: {log.operator_name}<br/>
+                      Started: {new Date(log.start_time).toLocaleString()}<br/>
+                      {log.end_time && `Completed: ${new Date(log.end_time).toLocaleString()}`}
+                      {log.notes && <><br/>Notes: {log.notes}</>}
+                    </div>
+                  </Card>
+                ))
+              ) : (
+                <p>No operation history available</p>
+              )}
+            </div>
+          )}
+        </Modal>
       </Content>
     </Layout>
   );
@@ -2245,6 +2406,16 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
   const [currentUser] = useState<User | null>(mockApiService.getCurrentUser());
   const [showBarrelTracking, setShowBarrelTracking] = useState(false);
   const [barrelTrackingData, setBarrelTrackingData] = useState<any[]>([]);
+  const [selectedBarrelDetails, setSelectedBarrelDetails] = useState<any | null>(null);
+  
+  // QC Dashboard state
+  const [showQCDashboard, setShowQCDashboard] = useState(false);
+  const [qcStats, setQCStats] = useState<any>(null);
+  const [showInspectionForm, setShowInspectionForm] = useState(false);
+  const [inspectionBarrel, setInspectionBarrel] = useState<SimpleBarrel | null>(null);
+  const [holdModalVisible, setHoldModalVisible] = useState(false);
+  const [holdBarrel, setHoldBarrel] = useState<SimpleBarrel | null>(null);
+  const [holdReason, setHoldReason] = useState('');
   
   // Security function to check if current user can access a specific station
   const canAccessStation = (stationId: string): boolean => {
@@ -2341,14 +2512,16 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [barrelsData, metricsData, trackingData] = await Promise.all([
+      const [barrelsData, metricsData, trackingData, qcStatsData] = await Promise.all([
         mockApiService.getBarrels(),
         mockApiService.getMetrics(),
-        mockApiService.getBarrelProcessInfo()
+        mockApiService.getBarrelProcessInfo(),
+        mockApiService.getQCStats()
       ]);
       setBarrels(barrelsData);
       setMetrics(metricsData);
       setBarrelTrackingData(trackingData);
+      setQCStats(qcStatsData);
       setLastSync(new Date()); // Update sync timestamp
     } catch (error) {
       notification.error({ message: 'Error loading data', description: 'Please check the connection.' });
@@ -2554,20 +2727,18 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
 
   // Table columns for barrels
   const columns = [
-    { title: 'ID', dataIndex: 'id', key: 'id', width: 60 },
-    { title: 'Caliber', dataIndex: 'caliber', key: 'caliber' },
-    { title: 'Length (in)', dataIndex: 'length_inches', key: 'length_inches' },
-    { title: 'Twist', dataIndex: 'twist_rate', key: 'twist_rate' },
-    { title: 'Material', dataIndex: 'material', key: 'material' },
+    { title: 'ID', dataIndex: 'id', key: 'id', width: 70 },
+    { title: 'Caliber', dataIndex: 'caliber', key: 'caliber', width: 150 },
+    { title: 'Length (in)', dataIndex: 'length_inches', key: 'length_inches', width: 100 },
+    { title: 'Twist', dataIndex: 'twist_rate', key: 'twist_rate', width: 80 },
+    { title: 'Material', dataIndex: 'material', key: 'material', width: 130 },
     { 
       title: 'Priority', 
       dataIndex: 'priority', 
-      key: 'priority', 
+      key: 'priority',
+      width: 100,
       render: (p: string) => (
-        <span style={{ 
-          fontWeight: 600,
-          color: p === 'High' ? '#f5222d' : p === 'Medium' ? '#faad14' : '#52c41a'
-        }}>
+        <span className={`priority-${p.toLowerCase()}`}>
           {p}
         </span>
       )
@@ -2575,30 +2746,57 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
     { 
       title: 'Status', 
       dataIndex: 'status', 
-      key: 'status', 
-      render: (s: string) => <span>{s.replace(/_/g, ' ')}</span> 
+      key: 'status',
+      width: 160,
+      render: (s: string) => {
+        const statusClass = s.includes('PENDING') ? 'status-pending' : 
+                           s.includes('IN_PROGRESS') ? 'status-in-progress' : 'status-completed';
+        return <span className={`status-badge ${statusClass}`}>{s.replace(/_/g, ' ')}</span>;
+      }
+    },
+    {
+      title: 'QC',
+      dataIndex: 'qc_status',
+      key: 'qc_status',
+      width: 80,
+      render: (qcStatus: string, record: SimpleBarrel) => {
+        if (record.qc_status === 'hold') {
+          return <span style={{ color: '#ff4d4f', fontWeight: 600 }}>🛑 HOLD</span>;
+        }
+        if (record.qc_status === 'passed') {
+          return <span style={{ color: '#52c41a' }}>✓ Pass</span>;
+        }
+        if (record.qc_status === 'failed') {
+          return <span style={{ color: '#ff4d4f' }}>✗ Fail</span>;
+        }
+        return <span style={{ color: '#999' }}>—</span>;
+      }
     },
     { 
       title: 'Created', 
       dataIndex: 'created_at', 
-      key: 'created_at', 
+      key: 'created_at',
+      width: 160,
       render: (d: string) => new Date(d).toLocaleString() 
     },
     {
       title: 'Begin Time',
       dataIndex: 'started_at',
       key: 'started_at',
-      render: (d?: string) => d ? new Date(d).toLocaleString() : 'N/A'
+      width: 140,
+      render: (d?: string) => d ? new Date(d).toLocaleString() : <span style={{ color: '#9ca3af' }}>N/A</span>
     },
     {
       title: 'End Time',
       dataIndex: 'completed_at',
       key: 'completed_at',
-      render: (d?: string) => d ? new Date(d).toLocaleString() : 'N/A'
+      width: 140,
+      render: (d?: string) => d ? new Date(d).toLocaleString() : <span style={{ color: '#9ca3af' }}>N/A</span>
     },
     {
       title: 'Operator',
       key: 'operator',
+      width: 130,
       render: (_: any, record: SimpleBarrel) => {
         if (record.current_operator_name) {
           const isCurrentUser = mockApiService.isCurrentOperator(record);
@@ -2807,18 +3005,27 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
-      <Sider breakpoint="lg" collapsedWidth="0" style={{ background: '#fff' }}>
+      <Sider 
+        width={240} 
+        breakpoint="lg" 
+        collapsedWidth="0" 
+        style={{ 
+          background: '#fff',
+          boxShadow: '2px 0 8px rgba(0,0,0,0.06)'
+        }}
+      >
         <div style={{ 
-          height: 64, 
+          height: 72, 
           margin: 16, 
           textAlign: 'center', 
           fontWeight: 700, 
-          fontSize: 22,
+          fontSize: 20,
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'center'
+          justifyContent: 'center',
+          color: '#1f2937'
         }}>
-          <AppstoreOutlined style={{ fontSize: 32, color: '#1677ff', marginRight: 8 }} />
+          <AppstoreOutlined style={{ fontSize: 28, color: '#1677ff', marginRight: 10 }} />
           MES Admin
         </div>
         <Menu 
@@ -2837,12 +3044,12 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
           }}
           items={accessibleStations.map(station => ({
             key: station.id,
-            icon: <BarChartOutlined />,
+            icon: <BarChartOutlined style={{ fontSize: 18 }} />,
             label: (
-              <span>
+              <span style={{ fontSize: 15 }}>
                 {station.name}
                 {!canAccessStation(station.id) && (
-                  <span style={{ color: '#ff4d4f', fontSize: 10, marginLeft: 8 }}>🔒 LOCKED</span>
+                  <span style={{ color: '#ff4d4f', fontSize: 11, marginLeft: 8 }}>🔒</span>
                 )}
               </span>
             )
@@ -2852,204 +3059,94 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
       
       <Layout>
         <Header style={{ 
-          background: '#1677ff', 
+          background: 'linear-gradient(135deg, #1677ff 0%, #0958d9 100%)', 
           color: '#fff', 
-          padding: '0 24px', 
+          padding: '0 20px', 
           display: 'flex', 
           alignItems: 'center', 
-          justifyContent: 'space-between' 
+          justifyContent: 'space-between',
+          height: 56,
+          boxShadow: '0 2px 8px rgba(0,0,0,0.15)'
         }}>
-          <div style={{ fontSize: 24, fontWeight: 700, letterSpacing: 1, display: 'flex', alignItems: 'center', gap: 16 }}>
-            Rifle Barrel MES
-            {/* Multi-tablet sync indicator */}
-            <div style={{ 
-              fontSize: 12, 
-              fontWeight: 400, 
+          {/* Left: Title and status */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <span style={{ fontSize: 20, fontWeight: 700 }}>Rifle Barrel MES</span>
+            <span style={{ 
+              fontSize: 11, 
               background: syncConfig.enabled ? '#52c41a' : '#faad14',
-              color: '#fff',
               padding: '2px 8px',
               borderRadius: 4
             }}>
-              {syncConfig.enabled ? '🔄 Multi-Tablet Sync ON' : '📱 Local Mode'}
-            </div>
-            {/* Tablet identifier */}
-            <div style={{ 
-              fontSize: 11, 
-              fontWeight: 400, 
-              background: '#0958d9',
-              color: '#fff',
-              padding: '2px 6px',
-              borderRadius: 3
-            }}>
-              {mockApiService.getTabletDisplayName(mockApiService.getTabletId())}
-            </div>
+              {syncConfig.enabled ? 'Sync' : 'Local'}
+            </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {/* Impersonation indicator */}
+          
+          {/* Center: User info */}
+          <div style={{ 
+            display: 'flex', 
+            alignItems: 'center', 
+            gap: 8,
+            background: 'rgba(255,255,255,0.15)',
+            padding: '4px 12px',
+            borderRadius: 20,
+            fontSize: 13
+          }}>
+            <span>👤 {currentUser?.fullName || 'Anonymous'}</span>
+            <span style={{ 
+              background: currentUser?.role === 'admin' ? '#722ed1' : currentUser?.role === 'supervisor' ? '#faad14' : '#52c41a',
+              padding: '1px 6px',
+              borderRadius: 4,
+              fontSize: 10,
+              fontWeight: 600
+            }}>
+              {currentUser?.role?.toUpperCase()}
+            </span>
             {mockApiService.isImpersonating() && (
-              <div style={{
-                background: '#fa8c16',
-                color: '#fff',
-                padding: '4px 12px',
-                borderRadius: 20,
-                fontSize: 11,
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                animation: 'pulse 2s infinite'
-              }}>
-                🎭 IMPERSONATING
-                <Button
-                  size="small"
-                  onClick={async () => {
-                    try {
-                      const originalUser = await mockApiService.stopImpersonation();
-                      if (originalUser) {
-                        notification.success({
-                          message: 'Impersonation Stopped',
-                          description: `Returned to ${originalUser.fullName} account.`
-                        });
-                        window.location.reload();
-                      }
-                    } catch (error) {
-                      notification.error({ message: 'Failed to stop impersonation' });
-                    }
-                  }}
-                  style={{
-                    background: '#fff',
-                    color: '#fa8c16',
-                    border: 'none',
-                    height: 18,
-                    fontSize: 9,
-                    padding: '0 6px'
-                  }}
-                >
-                  STOP
-                </Button>
-              </div>
+              <Button
+                size="small"
+                onClick={async () => {
+                  const originalUser = await mockApiService.stopImpersonation();
+                  if (originalUser) window.location.reload();
+                }}
+                style={{ background: '#fa8c16', border: 'none', color: '#fff', height: 20, fontSize: 10, padding: '0 6px' }}
+              >
+                🎭 Stop
+              </Button>
             )}
-            
-            {/* Sync Status */}
-            <div style={{ 
-              fontSize: 11, 
-              color: 'rgba(255,255,255,0.8)',
-              textAlign: 'center'
-            }}>
-              <div>🔄 Last Sync</div>
-              <div style={{ fontWeight: 600 }}>
-                {lastSync.toLocaleTimeString()}
-              </div>
-            </div>
-            
-            {/* User information */}
-            <div style={{ 
-              display: 'flex', 
-              alignItems: 'center', 
-              gap: 8,
-              background: 'rgba(255,255,255,0.1)',
-              padding: '4px 12px',
-              borderRadius: 20,
-              fontSize: 13
-            }}>
-              <span>👤</span>
-              <span style={{ fontWeight: 600 }}>
-                {currentUser?.fullName || 'Anonymous'}
-              </span>
-              <span style={{ opacity: 0.7 }}>
-                ({currentUser?.role || 'guest'})
-              </span>
-              {mockApiService.isImpersonating() && (
-                <span style={{ color: '#ffd666', fontSize: 11, marginLeft: 8 }}>
-                  [Originally: {mockApiService.getOriginalUser()?.fullName}]
-                </span>
-              )}
-              {currentUser && (() => {
-                if (currentUser.role === 'admin') {
-                  return (
-                    <span style={{ 
-                      background: 'rgba(255,255,255,0.2)',
-                      padding: '2px 6px',
-                      borderRadius: 10,
-                      fontSize: 11,
-                      marginLeft: 4,
-                      color: '#ffd700'
-                    }}>
-                      🔑 Full Access
-                    </span>
-                  );
-                }
-                
-                if (currentUser.role === 'supervisor') {
-                  return (
-                    <span style={{ 
-                      background: 'rgba(255,255,255,0.2)',
-                      padding: '2px 6px',
-                      borderRadius: 10,
-                      fontSize: 11,
-                      marginLeft: 4,
-                      color: '#faad14'
-                    }}>
-                      🔑 All Stations
-                    </span>
-                  );
-                }
-                
-                const assignedStations = mockApiService.getAssignedStations(currentUser.id);
-                if (assignedStations.length > 0) {
-                  const stationNames = assignedStations.map(id => {
-                    const station = stations.find(s => s.id === id);
-                    return station?.name || `Station ${id}`;
-                  });
-                  return (
-                    <span style={{ 
-                      background: canAccessStation(selectedStation) ? 'rgba(34, 197, 94, 0.2)' : 'rgba(239, 68, 68, 0.2)',
-                      padding: '2px 6px',
-                      borderRadius: 10,
-                      fontSize: 11,
-                      marginLeft: 4,
-                      color: canAccessStation(selectedStation) ? '#22c55e' : '#ef4444'
-                    }}>
-                      📍 {stationNames.join(', ')}
-                      {canAccessStation(selectedStation) ? ' ✅' : ' 🔒'}
-                    </span>
-                  );
-                } else {
-                  return (
-                    <span style={{ 
-                      background: 'rgba(239, 68, 68, 0.2)',
-                      padding: '2px 6px',
-                      borderRadius: 10,
-                      fontSize: 11,
-                      marginLeft: 4,
-                      color: '#ef4444'
-                    }}>
-                      ⚠️ No Stations Assigned
-                    </span>
-                  );
-                }
-              })()}
-            </div>
-            
-            {/* Barrel Tracking button for all users */}
+          </div>
+          
+          {/* Right: Action buttons */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Button 
               icon={<BarChartOutlined />} 
               onClick={() => setShowBarrelTracking(true)} 
-              type="primary"
-              ghost
+              size="small"
+              style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.5)', color: '#fff' }}
             >
-              Barrel Tracking
+              Tracking
             </Button>
             
-            {/* Admin Panel Access */}
+            <Button 
+              icon={<SafetyCertificateOutlined />} 
+              onClick={() => setShowQCDashboard(true)} 
+              size="small"
+              style={{ 
+                background: 'transparent', 
+                border: `1px solid ${qcStats?.barrelsOnHold > 0 ? '#ff4d4f' : 'rgba(255,255,255,0.5)'}`, 
+                color: qcStats?.barrelsOnHold > 0 ? '#ff4d4f' : '#fff' 
+              }}
+            >
+              QC {qcStats?.barrelsOnHold > 0 && `(${qcStats.barrelsOnHold})`}
+            </Button>
+            
             {currentUser?.role === 'admin' && (
               <Button 
                 icon={<AppstoreOutlined />} 
                 onClick={() => onShowAdminPanel?.()} 
-                type="primary"
-                style={{ background: '#722ed1', borderColor: '#722ed1' }}
+                size="small"
+                style={{ background: '#722ed1', border: 'none', color: '#fff' }}
               >
-                Admin Panel
+                Admin
               </Button>
             )}
             
@@ -3057,16 +3154,14 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
               icon={<ReloadOutlined />} 
               onClick={loadData} 
               loading={isLoading} 
-              type="primary"
-            >
-              Refresh
-            </Button>
+              size="small"
+              style={{ background: '#52c41a', border: 'none', color: '#fff' }}
+            />
             
             <Button 
-              icon={<ExclamationCircleOutlined />} 
               onClick={handleLogout} 
-              type="primary"
-              ghost
+              size="small"
+              style={{ background: 'transparent', border: '1px solid rgba(255,255,255,0.5)', color: '#fff' }}
             >
               Logout
             </Button>
@@ -3099,46 +3194,46 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
             <div style={{
               background: 'linear-gradient(90deg, #fef3c7 0%, #fde68a 100%)',
               border: '1px solid #f59e0b',
-              borderRadius: 8,
-              padding: 16,
+              borderRadius: 12,
+              padding: 20,
               marginBottom: 24,
               textAlign: 'center'
             }}>
-              <div style={{ fontSize: 16, fontWeight: 600, color: '#d97706', marginBottom: 8 }}>
+              <div style={{ fontSize: 18, fontWeight: 600, color: '#d97706', marginBottom: 8 }}>
                 ⚠️ Unauthorized Station Selected
               </div>
-              <div style={{ color: '#92400e', fontSize: 14 }}>
+              <div style={{ color: '#92400e', fontSize: 15 }}>
                 You are viewing a station you're not authorized to operate. 
                 Your assigned stations: {accessibleStations.map(s => s.name).join(', ')}
               </div>
             </div>
           )}
           
-          <Row gutter={24} style={{ marginBottom: 24 }}>
+          <Row gutter={24} style={{ marginBottom: 28 }}>
             <Col span={6}>
-              <Card>
+              <Card className="metrics-card" style={{ borderLeft: '4px solid #1677ff' }}>
                 <Statistic 
                   title="Total WIP" 
                   value={metrics?.total_wip || 0} 
-                  prefix={<BarChartOutlined />} 
+                  prefix={<BarChartOutlined style={{ color: '#1677ff', fontSize: 24 }} />} 
                 />
               </Card>
             </Col>
             <Col span={6}>
-              <Card>
+              <Card className="metrics-card" style={{ borderLeft: '4px solid #52c41a' }}>
                 <Statistic 
                   title="Completed Today" 
                   value={metrics?.completed_today || 0} 
-                  prefix={<CheckCircleOutlined />} 
+                  prefix={<CheckCircleOutlined style={{ color: '#52c41a', fontSize: 24 }} />} 
                 />
               </Card>
             </Col>
             <Col span={6}>
-              <Card>
+              <Card className="metrics-card" style={{ borderLeft: '4px solid #faad14' }}>
                 <Statistic 
                   title="In Progress" 
                   value={barrels.filter(b => b.status.includes('IN_PROGRESS')).length} 
-                  prefix={<ClockCircleOutlined />} 
+                  prefix={<ClockCircleOutlined style={{ color: '#faad14', fontSize: 24 }} />} 
                 />
               </Card>
             </Col>
@@ -3147,16 +3242,21 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
                 type="primary" 
                 icon={<PlusOutlined />} 
                 block 
-                size="large" 
+                size="large"
+                style={{ height: '100%', minHeight: 90, fontSize: 18, fontWeight: 600 }}
                 onClick={() => setShowNewBarrelForm(true)}
               >
-                New Barrel
+                + New Barrel
               </Button>
             </Col>
           </Row>
           
           <Card 
-            title={`${stations.find(s => s.id === selectedStation)?.name} Station`} 
+            title={
+              <span style={{ fontSize: 20, fontWeight: 600 }}>
+                {stations.find(s => s.id === selectedStation)?.name} Station
+              </span>
+            } 
             variant="outlined"
             style={{ marginBottom: 24 }}
           >
@@ -3166,6 +3266,7 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
               rowKey="id"
               loading={isLoading}
               pagination={false}
+              scroll={{ x: 1200 }}
               locale={{ emptyText: 'No barrels at this station.' }}
             />
           </Card>
@@ -3434,38 +3535,7 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
                   render: (_: any, record: any) => (
                     <Button 
                       size="small"
-                      onClick={() => {
-                        Modal.info({
-                          title: `Barrel #${record.id} Details`,
-                          width: 600,
-                          content: (
-                            <div>
-                              <Card size="small" style={{ marginBottom: 16 }}>
-                                <div><strong>Specifications:</strong></div>
-                                <div>{record.caliber} • {record.length_inches}" • {record.twist_rate}</div>
-                                <div>{record.material}</div>
-                              </Card>
-                              
-                              <div style={{ fontWeight: 600, marginBottom: 8 }}>Operation History:</div>
-                              {record.operationHistory && record.operationHistory.length > 0 ? (
-                                record.operationHistory.map((log: any, index: number) => (
-                                  <Card key={index} size="small" style={{ marginBottom: 8 }}>
-                                    <div style={{ fontWeight: 600 }}>{log.station_name}</div>
-                                    <div style={{ fontSize: 12, color: '#666' }}>
-                                      Operator: {log.operator_name}<br/>
-                                      Started: {new Date(log.start_time).toLocaleString()}<br/>
-                                      {log.end_time && `Completed: ${new Date(log.end_time).toLocaleString()}`}
-                                      {log.notes && <><br/>Notes: {log.notes}</>}
-                                    </div>
-                                  </Card>
-                                ))
-                              ) : (
-                                <p>No operation history available</p>
-                              )}
-                            </div>
-                          )
-                        });
-                      }}
+                      onClick={() => setSelectedBarrelDetails(record)}
                     >
                       Details
                     </Button>
@@ -3473,6 +3543,536 @@ function AppContent({ onShowAdminPanel }: { onShowAdminPanel?: () => void }) {
                 }
               ]}
             />
+          </Modal>
+
+          {/* Barrel Details Modal */}
+          <Modal
+            title={selectedBarrelDetails ? `Barrel #${selectedBarrelDetails.id} Details` : 'Barrel Details'}
+            open={!!selectedBarrelDetails}
+            onCancel={() => setSelectedBarrelDetails(null)}
+            width={650}
+            footer={[
+              <Button key="close" type="primary" onClick={() => setSelectedBarrelDetails(null)}>
+                Close
+              </Button>
+            ]}
+          >
+            {selectedBarrelDetails && (
+              <div>
+                <Card size="small" style={{ marginBottom: 16, background: '#f8fafc' }}>
+                  <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 8 }}>📋 Specifications</div>
+                  <Row gutter={16}>
+                    <Col span={8}>
+                      <div style={{ color: '#666', fontSize: 12 }}>Caliber</div>
+                      <div style={{ fontWeight: 600 }}>{selectedBarrelDetails.caliber}</div>
+                    </Col>
+                    <Col span={8}>
+                      <div style={{ color: '#666', fontSize: 12 }}>Length</div>
+                      <div style={{ fontWeight: 600 }}>{selectedBarrelDetails.length_inches}"</div>
+                    </Col>
+                    <Col span={8}>
+                      <div style={{ color: '#666', fontSize: 12 }}>Twist Rate</div>
+                      <div style={{ fontWeight: 600 }}>{selectedBarrelDetails.twist_rate}</div>
+                    </Col>
+                  </Row>
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ color: '#666', fontSize: 12 }}>Material</div>
+                    <div style={{ fontWeight: 600 }}>{selectedBarrelDetails.material}</div>
+                  </div>
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ color: '#666', fontSize: 12 }}>Current Status</div>
+                    <div style={{ fontWeight: 600 }}>{selectedBarrelDetails.currentStation} - {selectedBarrelDetails.progressPercentage}% Complete</div>
+                  </div>
+                  {selectedBarrelDetails.qc_status && (
+                    <div style={{ marginTop: 12 }}>
+                      <div style={{ color: '#666', fontSize: 12 }}>QC Status</div>
+                      <div style={{ fontWeight: 600 }}>
+                        {selectedBarrelDetails.qc_status === 'hold' && (
+                          <span style={{ color: '#ff4d4f' }}>🛑 ON HOLD - {selectedBarrelDetails.hold_reason}</span>
+                        )}
+                        {selectedBarrelDetails.qc_status === 'passed' && (
+                          <span style={{ color: '#52c41a' }}>✓ PASSED</span>
+                        )}
+                        {selectedBarrelDetails.qc_status === 'failed' && (
+                          <span style={{ color: '#ff4d4f' }}>✗ FAILED</span>
+                        )}
+                        {selectedBarrelDetails.qc_status === 'pending' && (
+                          <span style={{ color: '#faad14' }}>⏳ PENDING</span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </Card>
+
+                {/* Inspection History */}
+                {selectedBarrelDetails.inspections && selectedBarrelDetails.inspections.length > 0 && (
+                  <>
+                    <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>🔍 Inspection History</div>
+                    {selectedBarrelDetails.inspections.map((insp: InspectionRecord, index: number) => (
+                      <Card 
+                        key={index} 
+                        size="small" 
+                        style={{ 
+                          marginBottom: 8, 
+                          borderLeft: `4px solid ${insp.overall_result === 'pass' ? '#52c41a' : insp.overall_result === 'fail' ? '#ff4d4f' : '#faad14'}`
+                        }}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ fontWeight: 600 }}>{insp.inspection_type.replace('_', ' ').toUpperCase()}</div>
+                          <span style={{ 
+                            padding: '2px 8px', 
+                            borderRadius: 4,
+                            fontWeight: 600,
+                            fontSize: 11,
+                            background: insp.overall_result === 'pass' ? '#f6ffed' : insp.overall_result === 'fail' ? '#fff2f0' : '#fffbe6',
+                            color: insp.overall_result === 'pass' ? '#52c41a' : insp.overall_result === 'fail' ? '#ff4d4f' : '#faad14'
+                          }}>
+                            {insp.overall_result.toUpperCase()}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: '#666', marginTop: 4 }}>
+                          Inspector: {insp.inspector_name} | {new Date(insp.created_at).toLocaleString()}
+                        </div>
+                        {insp.measurements && insp.measurements.length > 0 && (
+                          <div style={{ marginTop: 8, fontSize: 12 }}>
+                            {insp.measurements.map((m, mi) => (
+                              <span key={mi} style={{ 
+                                marginRight: 12,
+                                color: m.passed ? '#52c41a' : '#ff4d4f'
+                              }}>
+                                {m.name}: {m.value}{m.unit} {m.passed ? '✓' : '✗'}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                        {insp.notes && <div style={{ marginTop: 4, fontStyle: 'italic', fontSize: 12 }}>📝 {insp.notes}</div>}
+                      </Card>
+                    ))}
+                  </>
+                )}
+                
+                <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 12 }}>🔧 Operation History</div>
+                {selectedBarrelDetails.operationHistory && selectedBarrelDetails.operationHistory.length > 0 ? (
+                  selectedBarrelDetails.operationHistory.map((log: any, index: number) => (
+                    <Card key={index} size="small" style={{ marginBottom: 8, borderLeft: '4px solid #1677ff' }}>
+                      <div style={{ fontWeight: 600, fontSize: 15 }}>{log.station_name}</div>
+                      <div style={{ fontSize: 13, color: '#666', marginTop: 4 }}>
+                        <div>👤 Operator: {log.operator_name || 'Unknown'}</div>
+                        <div>🕐 Started: {new Date(log.start_time).toLocaleString()}</div>
+                        {log.end_time && <div>✓ Completed: {new Date(log.end_time).toLocaleString()}</div>}
+                        {log.notes && <div style={{ marginTop: 4, fontStyle: 'italic' }}>📝 Notes: {log.notes}</div>}
+                      </div>
+                    </Card>
+                  ))
+                ) : (
+                  <Card size="small" style={{ textAlign: 'center', color: '#999' }}>
+                    <p>No operation history available yet.</p>
+                    <p style={{ fontSize: 12 }}>History will appear after operations are completed.</p>
+                  </Card>
+                )}
+              </div>
+            )}
+          </Modal>
+
+          {/* QC Dashboard Modal */}
+          <Modal
+            title={
+              <span style={{ fontSize: 20 }}>
+                <SafetyCertificateOutlined style={{ marginRight: 8, color: '#1677ff' }} />
+                Quality Control Dashboard
+              </span>
+            }
+            open={showQCDashboard}
+            onCancel={() => setShowQCDashboard(false)}
+            width={1000}
+            footer={[
+              <Button key="refresh" icon={<ReloadOutlined />} onClick={loadData}>
+                Refresh
+              </Button>,
+              <Button key="close" type="primary" onClick={() => setShowQCDashboard(false)}>
+                Close
+              </Button>
+            ]}
+          >
+            {/* QC Stats Summary */}
+            <Row gutter={16} style={{ marginBottom: 24 }}>
+              <Col span={6}>
+                <Card size="small" style={{ borderLeft: '4px solid #52c41a', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: '#52c41a' }}>{qcStats?.passRate || 0}%</div>
+                  <div style={{ color: '#666' }}>Pass Rate</div>
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ borderLeft: '4px solid #1677ff', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: '#1677ff' }}>{qcStats?.totalInspections || 0}</div>
+                  <div style={{ color: '#666' }}>Total Inspections</div>
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ borderLeft: '4px solid #ff4d4f', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: '#ff4d4f' }}>{qcStats?.barrelsOnHold || 0}</div>
+                  <div style={{ color: '#666' }}>On Hold</div>
+                </Card>
+              </Col>
+              <Col span={6}>
+                <Card size="small" style={{ borderLeft: '4px solid #faad14', textAlign: 'center' }}>
+                  <div style={{ fontSize: 28, fontWeight: 700, color: '#faad14' }}>{qcStats?.barrelsAwaitingInspection || 0}</div>
+                  <div style={{ color: '#666' }}>Awaiting Inspection</div>
+                </Card>
+              </Col>
+            </Row>
+
+            {/* Barrels on Hold Section */}
+            {barrels.filter(b => b.qc_status === 'hold').length > 0 && (
+              <Card 
+                title={<span style={{ color: '#ff4d4f' }}><StopOutlined /> Barrels on Hold (Quarantine)</span>}
+                size="small"
+                style={{ marginBottom: 16, borderColor: '#ff4d4f' }}
+              >
+                <Table
+                  dataSource={barrels.filter(b => b.qc_status === 'hold')}
+                  rowKey="id"
+                  size="small"
+                  pagination={false}
+                  columns={[
+                    { title: 'Barrel ID', dataIndex: 'id', key: 'id', render: (id: string) => `#${id}` },
+                    { title: 'Caliber', dataIndex: 'caliber', key: 'caliber' },
+                    { title: 'Reason', dataIndex: 'hold_reason', key: 'reason', render: (r: string) => <span style={{ color: '#ff4d4f' }}>{r}</span> },
+                    { title: 'Held By', dataIndex: 'held_by', key: 'held_by' },
+                    { title: 'Hold Date', dataIndex: 'hold_date', key: 'date', render: (d: string) => d ? new Date(d).toLocaleDateString() : '-' },
+                    { 
+                      title: 'Actions', 
+                      key: 'actions',
+                      render: (_: any, record: SimpleBarrel) => (
+                        <Button 
+                          size="small" 
+                          type="primary"
+                          onClick={async () => {
+                            const notes = prompt('Release notes (optional):');
+                            await mockApiService.releaseBarrelFromHold(record.id, notes || undefined);
+                            loadData();
+                          }}
+                        >
+                          Release
+                        </Button>
+                      )
+                    }
+                  ]}
+                />
+              </Card>
+            )}
+
+            {/* All Barrels QC Status */}
+            <Card 
+              title={<span><CheckSquareOutlined /> Barrel QC Status</span>}
+              size="small"
+              extra={
+                <Button 
+                  type="primary" 
+                  size="small"
+                  icon={<PlusOutlined />}
+                  onClick={() => {
+                    // Open inspection form for first barrel
+                    if (barrels.length > 0) {
+                      setInspectionBarrel(barrels[0]);
+                      setShowInspectionForm(true);
+                    }
+                  }}
+                >
+                  New Inspection
+                </Button>
+              }
+            >
+              <Table
+                dataSource={barrels}
+                rowKey="id"
+                size="small"
+                pagination={{ pageSize: 5 }}
+                columns={[
+                  { title: 'ID', dataIndex: 'id', key: 'id', width: 60, render: (id: string) => `#${id}` },
+                  { title: 'Caliber', dataIndex: 'caliber', key: 'caliber', width: 120 },
+                  { title: 'Status', dataIndex: 'status', key: 'status', width: 150,
+                    render: (status: string) => {
+                      const stationName = status.replace(/_IN_PROGRESS$|_PENDING$/, '').replace(/_/g, ' ');
+                      return stationName;
+                    }
+                  },
+                  { 
+                    title: 'QC Status', 
+                    dataIndex: 'qc_status', 
+                    key: 'qc_status',
+                    width: 100,
+                    render: (qcStatus: string) => {
+                      const colors: Record<string, { bg: string, color: string, label: string }> = {
+                        'passed': { bg: '#f6ffed', color: '#52c41a', label: 'PASSED' },
+                        'failed': { bg: '#fff2f0', color: '#ff4d4f', label: 'FAILED' },
+                        'hold': { bg: '#fff2f0', color: '#ff4d4f', label: 'ON HOLD' },
+                        'pending': { bg: '#fffbe6', color: '#faad14', label: 'PENDING' }
+                      };
+                      const style = colors[qcStatus] || colors['pending'];
+                      return (
+                        <span style={{ 
+                          background: style.bg, 
+                          color: style.color, 
+                          padding: '2px 8px', 
+                          borderRadius: 4,
+                          fontWeight: 600,
+                          fontSize: 11
+                        }}>
+                          {style.label}
+                        </span>
+                      );
+                    }
+                  },
+                  { 
+                    title: 'Inspections', 
+                    key: 'inspections',
+                    width: 100,
+                    render: (_: any, record: SimpleBarrel) => record.inspections?.length || 0
+                  },
+                  { 
+                    title: 'Actions', 
+                    key: 'actions',
+                    render: (_: any, record: SimpleBarrel) => (
+                      <Space>
+                        <Button 
+                          size="small"
+                          type="primary"
+                          onClick={() => {
+                            setInspectionBarrel(record);
+                            setShowInspectionForm(true);
+                          }}
+                        >
+                          Inspect
+                        </Button>
+                        {record.qc_status !== 'hold' && (
+                          <Button 
+                            size="small"
+                            danger
+                            icon={<StopOutlined />}
+                            onClick={() => {
+                              setHoldBarrel(record);
+                              setHoldModalVisible(true);
+                            }}
+                          >
+                            Hold
+                          </Button>
+                        )}
+                      </Space>
+                    )
+                  }
+                ]}
+              />
+            </Card>
+          </Modal>
+
+          {/* Hold Barrel Modal */}
+          <Modal
+            title={<span style={{ color: '#ff4d4f' }}><WarningOutlined /> Place Barrel on Hold</span>}
+            open={holdModalVisible}
+            onCancel={() => {
+              setHoldModalVisible(false);
+              setHoldBarrel(null);
+              setHoldReason('');
+            }}
+            onOk={async () => {
+              if (holdBarrel && holdReason) {
+                await mockApiService.placeBarrelOnHold(holdBarrel.id, holdReason);
+                setHoldModalVisible(false);
+                setHoldBarrel(null);
+                setHoldReason('');
+                loadData();
+              }
+            }}
+            okText="Place on Hold"
+            okButtonProps={{ danger: true, disabled: !holdReason }}
+          >
+            <p>This will place Barrel #{holdBarrel?.id} on hold and prevent further processing.</p>
+            <Form.Item label="Hold Reason" required>
+              <Input.TextArea
+                rows={3}
+                placeholder="Enter reason for placing barrel on hold..."
+                value={holdReason}
+                onChange={e => setHoldReason(e.target.value)}
+              />
+            </Form.Item>
+          </Modal>
+
+          {/* Inspection Form Modal */}
+          <Modal
+            title={<span><SafetyCertificateOutlined /> Record Inspection - Barrel #{inspectionBarrel?.id}</span>}
+            open={showInspectionForm}
+            onCancel={() => {
+              setShowInspectionForm(false);
+              setInspectionBarrel(null);
+            }}
+            width={700}
+            footer={null}
+          >
+            {inspectionBarrel && (
+              <Form
+                layout="vertical"
+                onFinish={async (values) => {
+                  // Build inspection record
+                  const measurements: InspectionMeasurement[] = [];
+                  
+                  // Add bore diameter measurement
+                  if (values.bore_diameter) {
+                    const boreSpec = { min: 0.300, max: 0.310 }; // Example spec for .308
+                    measurements.push({
+                      name: 'Bore Diameter',
+                      value: parseFloat(values.bore_diameter),
+                      unit: 'inches',
+                      min_spec: boreSpec.min,
+                      max_spec: boreSpec.max,
+                      passed: parseFloat(values.bore_diameter) >= boreSpec.min && parseFloat(values.bore_diameter) <= boreSpec.max
+                    });
+                  }
+                  
+                  // Add groove diameter measurement
+                  if (values.groove_diameter) {
+                    const grooveSpec = { min: 0.308, max: 0.310 };
+                    measurements.push({
+                      name: 'Groove Diameter',
+                      value: parseFloat(values.groove_diameter),
+                      unit: 'inches',
+                      min_spec: grooveSpec.min,
+                      max_spec: grooveSpec.max,
+                      passed: parseFloat(values.groove_diameter) >= grooveSpec.min && parseFloat(values.groove_diameter) <= grooveSpec.max
+                    });
+                  }
+                  
+                  // Build defects array
+                  const defects: Defect[] = [];
+                  if (values.defect_type && values.defect_description) {
+                    defects.push({
+                      id: `def_${Date.now()}`,
+                      type: values.defect_type,
+                      severity: values.defect_severity || 'minor',
+                      description: values.defect_description,
+                      location: values.defect_location,
+                      detected_by: currentUser?.fullName || 'Unknown',
+                      detected_at: new Date().toISOString()
+                    });
+                  }
+                  
+                  // Determine overall result
+                  const allMeasurementsPassed = measurements.every(m => m.passed);
+                  const hasCriticalDefect = defects.some(d => d.severity === 'critical');
+                  const hasMajorDefect = defects.some(d => d.severity === 'major');
+                  
+                  let overallResult: 'pass' | 'fail' | 'conditional' = 'pass';
+                  if (hasCriticalDefect || !allMeasurementsPassed) {
+                    overallResult = 'fail';
+                  } else if (hasMajorDefect) {
+                    overallResult = 'conditional';
+                  }
+                  
+                  // Override with manual selection if specified
+                  if (values.overall_result) {
+                    overallResult = values.overall_result;
+                  }
+                  
+                  await mockApiService.addInspection(inspectionBarrel.id, {
+                    station_id: '9', // Inspection station
+                    station_name: 'Inspection',
+                    inspector_id: currentUser?.id || 'unknown',
+                    inspector_name: currentUser?.fullName || 'Unknown',
+                    inspection_type: values.inspection_type || 'in_process',
+                    measurements,
+                    defects,
+                    overall_result: overallResult,
+                    notes: values.notes
+                  });
+                  
+                  notification.success({ 
+                    message: 'Inspection Recorded', 
+                    description: `Barrel #${inspectionBarrel.id} - ${overallResult.toUpperCase()}`
+                  });
+                  
+                  setShowInspectionForm(false);
+                  setInspectionBarrel(null);
+                  loadData();
+                }}
+              >
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item label="Inspection Type" name="inspection_type" initialValue="in_process">
+                      <Select>
+                        <Select.Option value="incoming">Incoming Material</Select.Option>
+                        <Select.Option value="in_process">In-Process</Select.Option>
+                        <Select.Option value="final">Final Inspection</Select.Option>
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item label="Overall Result" name="overall_result">
+                      <Select placeholder="Auto-calculated or select manually">
+                        <Select.Option value="pass">✓ PASS</Select.Option>
+                        <Select.Option value="conditional">⚠ CONDITIONAL</Select.Option>
+                        <Select.Option value="fail">✗ FAIL</Select.Option>
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                </Row>
+                
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Dimensional Measurements</div>
+                <Row gutter={16}>
+                  <Col span={12}>
+                    <Form.Item label="Bore Diameter (inches)" name="bore_diameter">
+                      <Input type="number" step="0.001" placeholder="e.g., 0.308" />
+                    </Form.Item>
+                  </Col>
+                  <Col span={12}>
+                    <Form.Item label="Groove Diameter (inches)" name="groove_diameter">
+                      <Input type="number" step="0.001" placeholder="e.g., 0.308" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Defect Recording (optional)</div>
+                <Row gutter={16}>
+                  <Col span={8}>
+                    <Form.Item label="Defect Type" name="defect_type">
+                      <Select placeholder="Select type" allowClear>
+                        <Select.Option value="surface">Surface</Select.Option>
+                        <Select.Option value="dimensional">Dimensional</Select.Option>
+                        <Select.Option value="material">Material</Select.Option>
+                        <Select.Option value="other">Other</Select.Option>
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item label="Severity" name="defect_severity">
+                      <Select placeholder="Select severity" allowClear>
+                        <Select.Option value="minor">Minor</Select.Option>
+                        <Select.Option value="major">Major</Select.Option>
+                        <Select.Option value="critical">Critical</Select.Option>
+                      </Select>
+                    </Form.Item>
+                  </Col>
+                  <Col span={8}>
+                    <Form.Item label="Location" name="defect_location">
+                      <Input placeholder="e.g., Bore, 6 inches from muzzle" />
+                    </Form.Item>
+                  </Col>
+                </Row>
+                <Form.Item label="Defect Description" name="defect_description">
+                  <Input.TextArea rows={2} placeholder="Describe the defect..." />
+                </Form.Item>
+                
+                <Form.Item label="Inspection Notes" name="notes">
+                  <Input.TextArea rows={2} placeholder="Additional notes..." />
+                </Form.Item>
+                
+                <Form.Item>
+                  <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                    <Button onClick={() => setShowInspectionForm(false)}>Cancel</Button>
+                    <Button type="primary" htmlType="submit">Save Inspection</Button>
+                  </div>
+                </Form.Item>
+              </Form>
+            )}
           </Modal>
 
           {isLoading && (
